@@ -38,10 +38,19 @@ def _is_local_vector(lyr):
 
 
 def _is_local_raster(lyr):
+    """本機網格：以完整來源字串（如 GPKG:檔案:表格）可被 GDAL 開啟且有波段"""
     if lyr.providerType() != "gdal":
         return False
-    path = QgsProviderRegistry.instance().decodeUri("gdal", lyr.source()).get("path", "")
-    return bool(path) and os.path.exists(path)
+    src = lyr.source()
+    low = src.lower()
+    if low.startswith(("http:", "https:", "/vsicurl", "wms:", "wcs:")):
+        return False
+    from osgeo import gdal
+    try:
+        ds = gdal.Open(src)
+    except Exception:
+        return False
+    return ds is not None and ds.RasterCount > 0
 
 
 def _source_path(lyr):
@@ -86,25 +95,45 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
             os.remove(p)
 
     msgs = []
-    used = set()
+    used = {"layer_styles", "gpkg_contents", "gpkg_spatial_ref_sys", "gpkg_geometry_columns",
+            "gpkg_extensions", "gpkg_metadata", "gpkg_tile_matrix", "gpkg_tile_matrix_set", "sqlite_sequence"}
     targets = list(project.mapLayers().values()) if include_all else list(layers or [])
     vectors = [l for l in targets if isinstance(l, QgsVectorLayer) and _is_local_vector(l)]
     rasters = [l for l in targets if isinstance(l, QgsRasterLayer) and _is_local_raster(l)]
     total = max(1, len(vectors) + len(rasters))
     done = 0
     plan = []  # (layer, new_source, provider, table, kind)
+    skipped = []
 
-    # (1) rasters first: the first one creates the file, no "append" needed
+    # (1) rasters first: the first one creates the file
+    gpkg_types = (gdal.GDT_Byte, gdal.GDT_Int16, gdal.GDT_UInt16, gdal.GDT_Float32)
     for lyr in rasters:
-        tbl = _safe(lyr.name(), used)
-        src = _source_path(lyr)
-        co = ["RASTER_TABLE={}".format(tbl)]
-        if os.path.exists(tmp):
-            co.append("APPEND_SUBDATASET=YES")
-        ds = gdal.Translate(tmp, src, format="GPKG", creationOptions=co)
-        if ds is None:
-            raise RuntimeError("網格「{}」寫入 gpkg 失敗：{}".format(lyr.name(), gdal.GetLastErrorMsg()))
-        ds = None
+        name = lyr.name()
+        try:
+            src = gdal.Open(lyr.source())        # keep "GPKG:file:table" etc.
+            nb = src.RasterCount
+            dtype = src.GetRasterBand(1).DataType
+            kw = {}
+            if nb == 1 and dtype not in gpkg_types:
+                kw["outputType"] = gdal.GDT_Float32
+                msgs.append("提示：網格「{}」資料型態 {} 不被 GeoPackage 支援，已轉為 Float32".format(
+                    name, gdal.GetDataTypeName(dtype)))
+            elif nb > 1 and (nb > 4 or any(src.GetRasterBand(i + 1).DataType != gdal.GDT_Byte for i in range(nb))):
+                skipped.append("網格「{}」：{} 波段 {} 影像無法存入 GeoPackage（僅支援單波段或 1–4 波段 Byte），保留原檔連結".format(
+                    name, nb, gdal.GetDataTypeName(dtype)))
+                continue
+            tbl = _safe(name, used)
+            co = ["RASTER_TABLE={}".format(tbl)]
+            if os.path.exists(tmp):
+                co.append("APPEND_SUBDATASET=YES")
+            out = gdal.Translate(tmp, src, format="GPKG", creationOptions=co, **kw)
+            if out is None:
+                raise RuntimeError(gdal.GetLastErrorMsg())
+            out = None
+            src = None
+        except Exception as ex:  # noqa
+            skipped.append("網格「{}」寫入失敗，保留原檔連結：{}".format(name, ex))
+            continue
         plan.append((lyr, "GPKG:{}:{}".format(gpkg, tbl), "gdal", tbl, "網格"))
         done += 1
         if feedback:
@@ -113,25 +142,63 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
     # (2) vectors
     ctx = project.transformContext() if project else QgsCoordinateTransformContext()
     for lyr in vectors:
-        tbl = _safe(lyr.name(), used)
+        name = lyr.name()
+        tbl = _safe(name, used)
         opts = QgsVectorFileWriter.SaveVectorOptions()
         opts.driverName = "GPKG"
         opts.layerName = tbl
         opts.fileEncoding = "UTF-8"
+        # a source field called "fid" would clash with the GeoPackage primary key
+        names_lower = [f.name().lower() for f in lyr.fields()]
+        if "fid" in names_lower:
+            pk, i = "gpkg_fid", 1
+            while pk in names_lower:
+                i += 1
+                pk = "gpkg_fid{}".format(i)
+            opts.layerOptions = ["FID={}".format(pk)]
+        # GeoPackage field names are case-insensitive: drop later duplicates
+        seen, keep = set(), []
+        for idx, f in enumerate(lyr.fields()):
+            k = f.name().lower()
+            if k in seen:
+                msgs.append("提示：圖層「{}」欄位「{}」與其他欄位僅大小寫不同，未寫入".format(name, f.name()))
+                continue
+            seen.add(k)
+            keep.append(idx)
+        if len(keep) != lyr.fields().count():
+            opts.attributes = keep
         opts.actionOnExistingFile = (
             E(QgsVectorFileWriter, "ActionOnExistingFile.CreateOrOverwriteLayer", "CreateOrOverwriteLayer")
             if os.path.exists(tmp) else
             E(QgsVectorFileWriter, "ActionOnExistingFile.CreateOrOverwriteFile", "CreateOrOverwriteFile"))
-        res = QgsVectorFileWriter.writeAsVectorFormatV3(lyr, tmp, ctx, opts)
-        if res[0] != E(QgsVectorFileWriter, "WriterError.NoError", "NoError"):
-            raise RuntimeError("圖層「{}」寫入 gpkg 失敗：{}".format(lyr.name(), res[1]))
+        try:
+            res = QgsVectorFileWriter.writeAsVectorFormatV3(lyr, tmp, ctx, opts)
+            ok = res[0] == E(QgsVectorFileWriter, "WriterError.NoError", "NoError")
+            err = res[1]
+        except Exception as ex:  # noqa
+            ok, err = False, str(ex)
+        if not ok:
+            used.discard(tbl.lower())
+            skipped.append("圖層「{}」寫入失敗，保留原檔連結：{}".format(name, err))
+            continue
         plan.append((lyr, "{}|layername={}".format(gpkg, tbl), "ogr", tbl, "向量"))
         done += 1
         if feedback:
             feedback(int(80.0 * done / total))
 
+    # layers that must not be lost (memory layers) or that were explicitly requested
+    must = set(id(l) for l in (layers or []))
+    lost = [l for l in vectors + rasters if l not in [p[0] for p in plan]
+            and (l.providerType() == "memory" or id(l) in must)]
+    if lost:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise RuntimeError("下列圖層無法寫入 gpkg，未儲存任何檔案：\n" + "\n".join(skipped))
+
     if not plan:
-        raise RuntimeError("專案中沒有可寫入的本機圖層。")
+        raise RuntimeError("專案中沒有可寫入的本機圖層。\n" + "\n".join(skipped))
 
     # the file is complete – give it its final name
     os.replace(tmp, gpkg)
@@ -163,4 +230,6 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
         raise RuntimeError("專案檔寫入失敗：{}".format(project.error()))
     if feedback:
         feedback(100)
+    if skipped:
+        msgs = ["⚠ 下列圖層未寫入 gpkg（專案中仍連結原始檔案）："] + skipped + [""] + msgs
     return qgz_path, gpkg, msgs
