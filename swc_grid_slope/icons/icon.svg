@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <rect x="2" y="2" width="60" height="60" rx="6" fill="#ffffff" stroke="#1f3b57" stroke-width="2"/>
+  <g fill="none" stroke="#8a8a8a" stroke-width="1.6">
+    <path d="M4 50 C18 44 26 52 40 40 S58 34 62 30"/>
+    <path d="M4 38 C16 32 26 40 38 28 S56 22 62 18"/>
+    <path d="M4 26 C14 20 24 28 34 16 S52 10 62 8"/>
+  </g>
+  <g fill="#fc8d59" fill-opacity="0.55"><rect x="32" y="12" width="20" height="20"/></g>
+  <g fill="#d9ef8b" fill-opacity="0.7"><rect x="12" y="32" width="20" height="20"/></g>
+  <g fill="none" stroke="#1f3b57" stroke-width="2">
+    <rect x="12" y="12" width="40" height="40"/>
+    <line x1="32" y1="12" x2="32" y2="52"/>
+    <line x1="12" y1="32" x2="52" y2="32"/>
+  </g>
+  <text x="22" y="28" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#1f3b57">3</text>
+  <text x="42" y="28" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#1f3b57">5</text>
+  <text x="22" y="48" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#1f3b57">2</text>
+  <text x="42" y="48" font-family="sans-serif" font-size="13" font-weight="bold" text-anchor="middle" fill="#1f3b57">4</text>
+</svg>
