@@ -61,12 +61,17 @@ lay = d._make_layout(); assert lay is not None
 with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "gui_layout.pdf"), "")):
     d._export_layout()
 assert os.path.exists(os.path.join(OUT, "gui_layout.pdf"))
-os.makedirs(os.path.join(OUT, "guiproj"), exist_ok=True)
-with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "guiproj", "gui_result"), "")), \
-     mock.patch.object(QMessageBox, "information") as mi, mock.patch.object(QMessageBox, "critical") as mc:
-    d._save_project()
-    assert not mc.called, mc.call_args
-    print(mi.call_args[0][2])
+import shutil; shutil.rmtree(os.path.join(OUT, "guiproj"), ignore_errors=True)
+d.le_pname.setText("A")
+for rnd in range(2):  # second round: files exist → overwrite prompt; gpkg in use → A_2
+    with mock.patch.object(QFileDialog, "getExistingDirectory", return_value=os.path.join(OUT, "guiproj")), \
+         mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes) as mq, \
+         mock.patch.object(QMessageBox, "information") as mi, mock.patch.object(QMessageBox, "critical") as mc:
+        d.le_folder.setText("") if rnd == 0 else None
+        d._save_project()
+        assert not mc.called, mc.call_args
+        print(mi.call_args[0][2].split("\n\n")[0])
+print(sorted(os.listdir(os.path.join(OUT, "guiproj"))))
 # run again (replace results), then rerun edit
 d._tool_edit(); d.run(); d.unload()
 print("GUI TEST PASSED"); sys.stdout.flush(); os._exit(0)

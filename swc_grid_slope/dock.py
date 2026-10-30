@@ -3,6 +3,7 @@
 
 import csv
 import math
+import os
 
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
@@ -45,7 +46,7 @@ from . import core, styles
 from .compat import DIST_METERS
 from .layout import LAYOUT_NAME, build_layout, export_layout
 from .maptools import DrawFrameTool, EditFrameTool, FrameController
-from .save import save_project_to_gpkg
+from .save import output_paths, save_project_to_folder
 
 GROUP_NAME = "坵塊法坡度分析"
 
@@ -241,10 +242,20 @@ class SlopeDock(QDockWidget):
         # 6. save ----------------------------------------------------------------
         g6 = QGroupBox("6. 儲存成果")
         f6 = QFormLayout(g6)
+        self.le_folder = QLineEdit()
+        self.le_folder.setPlaceholderText("選擇輸出資料夾")
+        self.bt_folder = QPushButton("瀏覽…")
+        self.bt_folder.clicked.connect(self._choose_folder)
+        h = QHBoxLayout()
+        h.addWidget(self.le_folder, 1)
+        h.addWidget(self.bt_folder)
+        f6.addRow("輸出資料夾", h)
+        self.le_pname = QLineEdit("坵塊法坡度分析")
+        f6.addRow("專案名稱", self.le_pname)
         self.ck_all = QCheckBox("專案內所有本機圖層（含輸入等高線/DEM/計畫範圍）一併寫入 gpkg")
         self.ck_all.setChecked(True)
         f6.addRow(self.ck_all)
-        self.bt_save = QPushButton("另存新專案（.qgz + .gpkg）")
+        self.bt_save = QPushButton("儲存專案（資料夾內：專案名稱.qgz + 專案名稱.gpkg）")
         self.bt_save.clicked.connect(self._save_project)
         f6.addRow(self.bt_save)
         v.addWidget(g6)
@@ -559,10 +570,25 @@ class SlopeDock(QDockWidget):
         self._msg(("已匯出 " if ok else "匯出失敗 ") + path, Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Critical)
 
     # ---------------------------------------------------------------- save
+    def _choose_folder(self):
+        d = QFileDialog.getExistingDirectory(self, "選擇輸出資料夾", self.le_folder.text())
+        if d:
+            self.le_folder.setText(d)
+
     def _save_project(self):
-        path, _ = QFileDialog.getSaveFileName(self, "另存新專案", "", "QGIS 專案 (*.qgz)")
-        if not path:
-            return
+        folder = self.le_folder.text().strip()
+        if not folder:
+            self._choose_folder()
+            folder = self.le_folder.text().strip()
+            if not folder:
+                return
+        name = self.le_pname.text().strip() or "坵塊法坡度分析"
+        qgz, gpkg = output_paths(folder, name)
+        exist = [p for p in (qgz, gpkg) if os.path.exists(p)]
+        if exist:
+            ans = QMessageBox.question(self, "檔案已存在", "下列檔案已存在，是否覆蓋？\n\n" + "\n".join(exist))
+            if ans != QMessageBox.StandardButton.Yes:
+                return
         prj = QgsProject.instance()
         layers = [prj.mapLayer(i) for i in self.result_ids.values() if prj.mapLayer(i) is not None]
         for extra in (self.cb_plan.currentLayer(), self.cb_contour.currentLayer() if self.rb_contour.isChecked() else None,
@@ -570,12 +596,13 @@ class SlopeDock(QDockWidget):
             if extra is not None:
                 layers.append(extra)
         try:
-            gpkg, msgs = save_project_to_gpkg(prj, path, include_all=self.ck_all.isChecked(), layers=layers,
-                                              feedback=lambda p: self.pb.setValue(p))
+            qgz, gpkg, msgs = save_project_to_folder(prj, folder, name, include_all=self.ck_all.isChecked(),
+                                                     layers=layers, feedback=lambda p: self.pb.setValue(p))
         except Exception as ex:  # noqa
             QMessageBox.critical(self, "儲存失敗", str(ex))
             return
-        QMessageBox.information(self, "儲存完成", "專案：{}\n資料：{}\n\n{}".format(prj.fileName(), gpkg, "\n".join(msgs)))
+        QMessageBox.information(self, "儲存完成", "資料夾：{}\n專案檔：{}\n資料庫：{}\n\n{}".format(
+            folder, os.path.basename(qgz), os.path.basename(gpkg), "\n".join(msgs)))
 
     # ------------------------------------------------------------- cleanup
     def closeEvent(self, e):

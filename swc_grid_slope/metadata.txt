@@ -3,16 +3,15 @@ name=SWC Grid Slope (坵塊法坡度分析)
 qgisMinimumVersion=3.22
 qgisMaximumVersion=4.99
 supportsQt6=True
-description=Grid (cell) method slope analysis for Taiwan Soil and Water Conservation Technical Regulations (水土保持技術規範), Articles 23, 25 and 26.
-version=0.2.0
+description=Grid (cell) method slope analysis following Taiwan's Soil and Water Conservation Technical Regulations (水土保持技術規範, Articles 23, 25, 26); competent authority: the Agency of Rural Development and Soil and Water Conservation (ARDSWC), Ministry of Agriculture, Taiwan (農業部農村發展及水土保持署).
+version=1.0.0
 author=黃敏郎 (Min-Lang Huang)
 email=yoshi.hml@gmail.com
-about=Implements the "grid method" (坵塊法) slope analysis required by Taiwan's Soil and Water Conservation Technical Regulations. Draw a rectangular analysis frame on the map (move / rotate / resize it interactively), choose a 10 m or 25 m cell, and the plugin fills the frame with square cells starting from the top-left corner, counts intersections between each cell edge and the contour lines, and computes the mean slope S = nπΔh/(8L)×100 and inclination θ for every cell. Slope grades 1–7 (Art. 23) and cell aspect (Art. 26) are written to attribute fields. Terrain input can be contour lines or a DEM (contours are generated automatically). The plugin styles and labels the results like a conventional hand-drawn grid slope map, builds a print layout (legend, north arrow, scale bar, statistics table, formula notes), and saves the whole project into a new GeoPackage plus a new .qgz project file. 依水土保持技術規範坵塊法計算坡度、分級、坡向並自動產製坵塊圖、版面與 GeoPackage 專案。
+about=Implements the "grid method" (坵塊法) slope analysis required by Taiwan's Soil and Water Conservation Technical Regulations (水土保持技術規範). The competent authority of the regulations is the Agency of Rural Development and Soil and Water Conservation, Ministry of Agriculture (ARDSWC, MOA; 農業部農村發展及水土保持署). This plugin is an independent tool and is not an official product of ARDSWC. Draw a rectangular analysis frame on the map (move / rotate / resize it interactively), choose a 10 m or 25 m cell, and the plugin fills the frame with square cells starting from the top-left corner, counts intersections between each cell edge and the contour lines, and computes the mean slope S = nπΔh/(8L)×100 and inclination θ for every cell. Slope grades 1–7 (Art. 23) and cell aspect (Art. 26) are written to attribute fields. Terrain input can be contour lines or a DEM (contours are generated automatically). The plugin styles and labels the results like a conventional hand-drawn grid slope map, builds a print layout (legend, north arrow, scale bar, statistics table, formula notes), and saves the whole project into an output folder as a new .qgz project file plus a GeoPackage holding all data. 依水土保持技術規範（主管機關：農業部農村發展及水土保持署）坵塊法計算坡度、分級、坡向並自動產製坵塊圖、版面與 GeoPackage 專案。
 tracker=https://github.com/yoshihuang/swc_grid_slope/issues
 repository=https://github.com/yoshihuang/swc_grid_slope
 homepage=https://github.com/yoshihuang/swc_grid_slope
-changelog=0.2.0 - QGIS 4 / Qt6 support (QGIS 3.22 – 4.99).
-    0.1.0 - First release: contour / DEM input, interactive rotated frame, 10/25 m cells, edge intersection counts, slope %, angle, grade, aspect, print layout, save to GeoPackage + project.
+changelog=1.0.0 - First public release: contour / DEM input, interactive rotated frame, 10/25 m cells, edge intersection counts, slope %, angle, grade, aspect, print layout, save project to an output folder (.qgz + .gpkg). Supports QGIS 3.22 – 4.99 (Qt5 / Qt6).
 tags=slope,grid,soil and water conservation,taiwan,contour,dem,水土保持,坵塊,坡度
 category=Vector
 icon=icons/icon.svg

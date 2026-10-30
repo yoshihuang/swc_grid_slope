@@ -130,12 +130,18 @@ for st, tag in ((styles.LABEL_STYLE_TEXT, "A"), (styles.LABEL_STYLE_BIGGRADE, "B
 
 # save
 prj.addMapLayer(dem2)
-gpkg, msgs = save.save_project_to_gpkg(prj, os.path.join(OUT, "proj", "result.qgz"))
+folder = os.path.join(OUT, "proj")
+qgz, gpkg, msgs = save.save_project_to_folder(prj, folder, "result")
 print("\n".join(msgs))
-assert os.path.exists(gpkg) and os.path.exists(os.path.join(OUT, "proj", "result.qgz"))
+assert os.path.exists(gpkg) and os.path.exists(qgz) and os.path.basename(qgz) == "result.qgz"
+assert not [f for f in os.listdir(folder) if f.startswith("~writing_")]
+# saving again into the same folder: the gpkg is now in use → auto suffix
+qgz2, gpkg2, _ = save.save_project_to_folder(prj, folder, "result")
+print("second save:", os.path.basename(qgz2), os.path.basename(gpkg2))
+assert os.path.basename(gpkg2) == "result_2.gpkg"
 # reopen
 prj.clear()
-assert prj.read(os.path.join(OUT, "proj", "result.qgz"))
+assert prj.read(qgz2)
 bad = [l.name() for l in prj.mapLayers().values() if not l.isValid()]
 print("reopened layers:", [l.name() for l in prj.mapLayers().values()], "invalid:", bad)
 assert not bad
