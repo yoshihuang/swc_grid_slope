@@ -79,3 +79,21 @@ def label_placement(name):
     if hasattr(Qgis, "LabelPlacement"):
         return getattr(Qgis.LabelPlacement, name)
     return getattr(QgsPalLayerSettings, name)  # pragma: no cover
+
+
+def E(owner, *paths):
+    """Enum lookup that works with PyQt5 (unscoped) and PyQt6/QGIS 4 (scoped).
+    E(QgsLayoutExporter, "ExportResult.Success", "Success")"""
+    return _enum(owner, paths[0], *paths[1:])
+
+
+# layout units
+if hasattr(Qgis, "LayoutUnit"):
+    LAYOUT_MM = Qgis.LayoutUnit.Millimeters
+else:  # pragma: no cover
+    LAYOUT_MM = QgsUnitTypes.LayoutMillimeters
+
+
+def wkb_geom_type(geom):
+    """QgsGeometry → GEOM_POINT / GEOM_LINE / GEOM_POLYGON"""
+    return geom.type()

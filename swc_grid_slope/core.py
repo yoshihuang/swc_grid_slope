@@ -21,10 +21,9 @@ from qgis.core import (
     QgsProject,
     QgsSpatialIndex,
     QgsVectorLayer,
-    QgsWkbTypes,
 )
 
-from .compat import make_field
+from .compat import GEOM_POINT, GEOM_POLYGON, make_field
 
 # --------------------------------------------------------------------------
 # 坡度分級（第 23 條）
@@ -201,8 +200,7 @@ def _extract_points(geom):
     out = []
     if geom is None or geom.isEmpty():
         return out
-    gt = QgsWkbTypes.geometryType(geom.wkbType())
-    if gt == QgsWkbTypes.geometryType(QgsWkbTypes.Point):
+    if geom.type() == GEOM_POINT:
         if geom.isMultipart():
             out.extend(geom.asMultiPoint())
         else:
@@ -210,7 +208,7 @@ def _extract_points(geom):
     else:
         # geometry collection or collinear overlap – keep only point parts
         for part in geom.asGeometryCollection():
-            if QgsWkbTypes.geometryType(part.wkbType()) == QgsWkbTypes.geometryType(QgsWkbTypes.Point):
+            if part.type() == GEOM_POINT:
                 out.extend(_extract_points(part))
     return out
 
@@ -259,7 +257,7 @@ class ContourSet(object):
                 g.get().dropMValue()
             except Exception:
                 pass
-            if g.type() == QgsWkbTypes.geometryType(QgsWkbTypes.Polygon):
+            if g.type() == GEOM_POLYGON:
                 g = QgsGeometry(g.constGet().boundary())
             geoms.append(g)
             z = None
@@ -606,8 +604,18 @@ def contours_from_dem(dem_layer, band, interval, dest_crs, extent=None, feedback
         gt = ds.GetGeoTransform()
         pad = abs(gt[1]) * 3
         tmp_tif = "/vsimem/swc_clip_{}.tif".format(uuid.uuid4().hex)
-        ds = gdal.Translate(tmp_tif, ds, projWin=[ext.xMinimum() - pad, ext.yMaximum() + pad,
-                                                  ext.xMaximum() + pad, ext.yMinimum() - pad])
+        # clamp to the raster bounds – padding outside the DEM would be filled
+        # with 0 and create false contours along the border
+        rx0, ry1 = gt[0], gt[3]
+        rx1 = gt[0] + gt[1] * ds.RasterXSize
+        ry0 = gt[3] + gt[5] * ds.RasterYSize
+        rx0, rx1 = min(rx0, rx1), max(rx0, rx1)
+        ry0, ry1 = min(ry0, ry1), max(ry0, ry1)
+        x0, x1 = max(rx0, ext.xMinimum() - pad), min(rx1, ext.xMaximum() + pad)
+        y0, y1 = max(ry0, ext.yMinimum() - pad), min(ry1, ext.yMaximum() + pad)
+        if x0 >= x1 or y0 >= y1:
+            raise RuntimeError("方格範圍與 DEM 沒有重疊。")
+        ds = gdal.Translate(tmp_tif, ds, projWin=[x0, y1, x1, y0])
         if ds is None:
             raise RuntimeError("DEM 裁切失敗，請確認範圍與 DEM 重疊。")
     b = ds.GetRasterBand(band)

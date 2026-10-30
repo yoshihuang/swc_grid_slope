@@ -3,7 +3,10 @@ import os
 
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction
+try:  # Qt6 / QGIS 4: QAction lives in QtGui
+    from qgis.PyQt.QtGui import QAction
+except ImportError:  # Qt5
+    from qgis.PyQt.QtWidgets import QAction
 from qgis.core import QgsApplication
 
 PLUGIN_DIR = os.path.dirname(__file__)

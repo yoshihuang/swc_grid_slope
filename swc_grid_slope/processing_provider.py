@@ -6,6 +6,7 @@ import os
 
 from qgis.PyQt.QtGui import QIcon
 from qgis.core import (
+    Qgis,
     QgsCoordinateTransform,
     QgsFeatureSink,
     QgsGeometry,
@@ -23,6 +24,22 @@ from qgis.core import (
 )
 
 from . import core
+from .compat import E
+
+if hasattr(Qgis, "ProcessingSourceType"):
+    _ST_TypeVectorPolygon = Qgis.ProcessingSourceType.VectorPolygon
+    _ST_TypeVectorLine = Qgis.ProcessingSourceType.VectorLine
+    _ST_TypeVectorPoint = Qgis.ProcessingSourceType.VectorPoint
+else:  # QGIS < 3.36
+    _ST_TypeVectorPolygon = QgsProcessing.TypeVectorPolygon
+    _ST_TypeVectorLine = QgsProcessing.TypeVectorLine
+    _ST_TypeVectorPoint = QgsProcessing.TypeVectorPoint
+if hasattr(Qgis, "ProcessingNumberParameterType"):
+    _NUM_INT = Qgis.ProcessingNumberParameterType.Integer
+    _NUM_DBL = Qgis.ProcessingNumberParameterType.Double
+else:  # QGIS < 3.36
+    _NUM_INT = QgsProcessingParameterNumber.Integer
+    _NUM_DBL = QgsProcessingParameterNumber.Double
 
 ICON = os.path.join(os.path.dirname(__file__), "icons", "icon.svg")
 
@@ -58,22 +75,22 @@ class GridSlopeAlgorithm(QgsProcessingAlgorithm):
 
     def initAlgorithm(self, config=None):
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.FRAME, "方格範圍（多邊形，取最小外接旋轉矩形）", [QgsProcessing.TypeVectorPolygon]))
+            self.FRAME, "方格範圍（多邊形，取最小外接旋轉矩形）", [_ST_TypeVectorPolygon]))
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.CONTOURS, "等高線（與 DEM 擇一）", [QgsProcessing.TypeVectorLine], optional=True))
+            self.CONTOURS, "等高線（與 DEM 擇一）", [_ST_TypeVectorLine], optional=True))
         self.addParameter(QgsProcessingParameterField(
             self.ELEV, "高程欄位（坡向用，選填）", parentLayerParameterName=self.CONTOURS, optional=True))
         self.addParameter(QgsProcessingParameterRasterLayer(self.DEM, "DEM（與等高線擇一）", optional=True))
-        self.addParameter(QgsProcessingParameterNumber(self.BAND, "DEM 波段", QgsProcessingParameterNumber.Integer, 1, minValue=1))
-        self.addParameter(QgsProcessingParameterNumber(self.DH, "等高線間距 Δh (m)", QgsProcessingParameterNumber.Double, 1.0, minValue=0.01))
+        self.addParameter(QgsProcessingParameterNumber(self.BAND, "DEM 波段", _NUM_INT, 1, minValue=1))
+        self.addParameter(QgsProcessingParameterNumber(self.DH, "等高線間距 Δh (m)", _NUM_DBL, 1.0, minValue=0.01))
         self.addParameter(QgsProcessingParameterEnum(self.CELL, "坵塊邊長 L", ["10 公尺", "25 公尺"], defaultValue=1))
         self.addParameter(QgsProcessingParameterEnum(self.PI, "圓周率", ["3.14（規範）", "math.pi"], defaultValue=0))
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.PLAN, "計畫範圍（選填，用於面積統計）", [QgsProcessing.TypeVectorPolygon], optional=True))
+            self.PLAN, "計畫範圍（選填，用於面積統計）", [_ST_TypeVectorPolygon], optional=True))
         self.addParameter(QgsProcessingParameterBoolean(self.ASPECT, "計算坡向", True))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_CELLS, "坵塊坡度分析", QgsProcessing.TypeVectorPolygon))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_EDGES, "坵塊邊交點數", QgsProcessing.TypeVectorLine))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_POINTS, "等高線交點", QgsProcessing.TypeVectorPoint))
+        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_CELLS, "坵塊坡度分析", _ST_TypeVectorPolygon))
+        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_EDGES, "坵塊邊交點數", _ST_TypeVectorLine))
+        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_POINTS, "等高線交點", _ST_TypeVectorPoint))
 
     def processAlgorithm(self, parameters, context, feedback):
         frame_src = self.parameterAsSource(parameters, self.FRAME, context)
@@ -123,7 +140,7 @@ class GridSlopeAlgorithm(QgsProcessingAlgorithm):
         for key, lyr in ((self.OUT_CELLS, res.cells), (self.OUT_EDGES, res.edges), (self.OUT_POINTS, res.points)):
             sink, dest = self.parameterAsSink(parameters, key, context, lyr.fields(), lyr.wkbType(), crs)
             for f in lyr.getFeatures():
-                sink.addFeature(f, QgsFeatureSink.FastInsert)
+                sink.addFeature(f, E(QgsFeatureSink, "Flag.FastInsert", "FastInsert"))
             out[key] = dest
         for d in res.stats:
             feedback.pushInfo("{}（{}）：{} 格，{:.2f} m²，{:.2f}%".format(d["name"], d["range"], d["count"], d["area"], d["pct"]))

@@ -22,7 +22,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
 )
 
-from .compat import UNIT_MAP, UNIT_MM, label_placement, label_prop
+from .compat import E, UNIT_MAP, UNIT_MM, label_placement, label_prop
 from .core import GRADE_COLORS, GRADES
 
 FONT_FAMILY = "Noto Sans CJK TC"
@@ -143,8 +143,8 @@ def style_cells(layer, cell, label_style=LABEL_STYLE_TEXT, colorize=True, show_n
         circ = _fmt(cell * 0.07, buffer=False)
         bg = QgsTextBackgroundSettings()
         bg.setEnabled(True)
-        bg.setType(QgsTextBackgroundSettings.ShapeCircle)
-        bg.setSizeType(QgsTextBackgroundSettings.SizeBuffer)
+        bg.setType(E(QgsTextBackgroundSettings, "ShapeType.ShapeCircle", "ShapeCircle"))
+        bg.setSizeType(E(QgsTextBackgroundSettings, "SizeType.SizeBuffer", "SizeBuffer"))
         bg.setSize(QSizeF(cell * 0.025, cell * 0.025))
         bg.setSizeUnit(UNIT_MAP)
         bg.setFillColor(QColor("white"))

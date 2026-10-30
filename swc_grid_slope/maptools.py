@@ -9,7 +9,7 @@ from qgis.PyQt.QtGui import QColor
 from qgis.core import QgsFeature, QgsGeometry, QgsProject
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 
-from .compat import GEOM_LINE, GEOM_POLYGON
+from .compat import E, GEOM_LINE, GEOM_POLYGON
 from .core import FRAME_FIELDS, Frame, new_memory_layer
 from .styles import style_frame
 
@@ -215,10 +215,10 @@ class EditFrameTool(QgsMapTool):
             m = QgsVertexMarker(self.canvas())
             m.setCenter(p)
             if k == "rot":
-                m.setIconType(QgsVertexMarker.ICON_CIRCLE)
+                m.setIconType(E(QgsVertexMarker, "IconType.ICON_CIRCLE", "ICON_CIRCLE"))
                 m.setColor(QColor(255, 120, 0))
             else:
-                m.setIconType(QgsVertexMarker.ICON_BOX)
+                m.setIconType(E(QgsVertexMarker, "IconType.ICON_BOX", "ICON_BOX"))
                 m.setColor(QColor(0, 120, 255))
             m.setIconSize(HANDLE_PX)
             m.setPenWidth(2)

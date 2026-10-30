@@ -7,6 +7,7 @@ import os
 from qgis.PyQt.QtGui import QFont
 
 from qgis.core import (
+    Qgis,
     QgsApplication,
     QgsLayoutExporter,
     QgsLayoutFrame,
@@ -25,17 +26,24 @@ from qgis.core import (
     QgsPrintLayout,
     QgsRectangle,
     QgsTextFormat,
-    QgsUnitTypes,
 )
 
+from .compat import DIST_METERS, LAYOUT_MM, E
 from .core import GRADES, PI_314
 from .styles import _font_family
 
 LAYOUT_NAME = "坵塊法坡度分析圖"
 
+if hasattr(Qgis, "LegendComponent"):
+    LEGEND_STYLES = (Qgis.LegendComponent.Title, Qgis.LegendComponent.Group,
+                     Qgis.LegendComponent.Subgroup, Qgis.LegendComponent.SymbolLabel)
+else:  # pragma: no cover
+    LEGEND_STYLES = (QgsLegendStyle.Title, QgsLegendStyle.Group,
+                     QgsLegendStyle.Subgroup, QgsLegendStyle.SymbolLabel)
+
 
 def _mm(v):
-    return QgsLayoutMeasurement(v, QgsUnitTypes.LayoutMillimeters)
+    return QgsLayoutMeasurement(v, LAYOUT_MM)
 
 
 def _label(layout, text, x, y, w, h, size=10, bold=False):
@@ -52,20 +60,20 @@ def _label(layout, text, x, y, w, h, size=10, bold=False):
         f.setPointSizeF(size)
         lb.setFont(f)
     layout.addLayoutItem(lb)
-    lb.attemptMove(QgsLayoutPoint(x, y, QgsUnitTypes.LayoutMillimeters))
-    lb.attemptResize(QgsLayoutSize(w, h, QgsUnitTypes.LayoutMillimeters))
+    lb.attemptMove(QgsLayoutPoint(x, y, LAYOUT_MM))
+    lb.attemptResize(QgsLayoutSize(w, h, LAYOUT_MM))
     return lb
 
 
 def _box(layout, x, y, w, h):
     s = QgsLayoutItemShape(layout)
-    s.setShapeType(QgsLayoutItemShape.Rectangle)
+    s.setShapeType(E(QgsLayoutItemShape, "Shape.Rectangle", "Rectangle"))
     from qgis.core import QgsFillSymbol
     s.setSymbol(QgsFillSymbol.createSimple({"color": "0,0,0,0", "style": "no",
                                             "outline_color": "#000000", "outline_width": "0.35"}))
     layout.addLayoutItem(s)
-    s.attemptMove(QgsLayoutPoint(x, y, QgsUnitTypes.LayoutMillimeters))
-    s.attemptResize(QgsLayoutSize(w, h, QgsUnitTypes.LayoutMillimeters))
+    s.attemptMove(QgsLayoutPoint(x, y, LAYOUT_MM))
+    s.attemptResize(QgsLayoutSize(w, h, LAYOUT_MM))
     return s
 
 
@@ -83,7 +91,7 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     layout.initializeDefaults()
     layout.setName(title)
     page = layout.pageCollection().page(0)
-    page.setPageSize(QgsLayoutSize(paper[0], paper[1], QgsUnitTypes.LayoutMillimeters))
+    page.setPageSize(QgsLayoutSize(paper[0], paper[1], LAYOUT_MM))
     mgr.addLayout(layout)
 
     W, H = paper
@@ -101,8 +109,8 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     mp = QgsLayoutItemMap(layout)
     mp.setId("main_map")
     layout.addLayoutItem(mp)
-    mp.attemptMove(QgsLayoutPoint(map_x, map_y, QgsUnitTypes.LayoutMillimeters))
-    mp.attemptResize(QgsLayoutSize(map_w, map_h, QgsUnitTypes.LayoutMillimeters))
+    mp.attemptMove(QgsLayoutPoint(map_x, map_y, LAYOUT_MM))
+    mp.attemptResize(QgsLayoutSize(map_w, map_h, LAYOUT_MM))
     mp.setFrameEnabled(True)
     mp.setFrameStrokeWidth(_mm(0.5))
     # extent: fit the (rotated) grid with 6 % margin
@@ -142,11 +150,11 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
             break
     na.setPicturePath(svg)
     layout.addLayoutItem(na)
-    na.attemptMove(QgsLayoutPoint(sx + side_w / 2 - 9, y, QgsUnitTypes.LayoutMillimeters))
-    na.attemptResize(QgsLayoutSize(18, 22, QgsUnitTypes.LayoutMillimeters))
+    na.attemptMove(QgsLayoutPoint(sx + side_w / 2 - 9, y, LAYOUT_MM))
+    na.attemptResize(QgsLayoutSize(18, 22, LAYOUT_MM))
     na.setLinkedMap(mp)
     try:
-        na.setNorthMode(QgsLayoutItemPicture.GridNorth)
+        na.setNorthMode(E(QgsLayoutItemPicture, "NorthMode.GridNorth", "GridNorth"))
     except Exception:
         pass
     y += 25
@@ -155,7 +163,7 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     sb = QgsLayoutItemScaleBar(layout)
     sb.setStyle("Single Box")
     sb.setLinkedMap(mp)
-    sb.setUnits(QgsUnitTypes.DistanceMeters)
+    sb.setUnits(DIST_METERS)
     sb.setUnitLabel("m")
     sb.setNumberOfSegments(2)
     sb.setNumberOfSegmentsLeft(0)
@@ -169,7 +177,7 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     except AttributeError:
         pass
     layout.addLayoutItem(sb)
-    sb.attemptMove(QgsLayoutPoint(sx + 5, y, QgsUnitTypes.LayoutMillimeters))
+    sb.attemptMove(QgsLayoutPoint(sx + 5, y, LAYOUT_MM))
     sb.update()
     y += 15
 
@@ -183,22 +191,22 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     for lyr in lyrs:
         root.addLayer(lyr)
     try:
-        for st in (QgsLegendStyle.Title, QgsLegendStyle.Group, QgsLegendStyle.Subgroup, QgsLegendStyle.SymbolLabel):
+        for st in LEGEND_STYLES:
             ls = lg.style(st)
             tf = ls.textFormat()
             tf.setFont(QFont(_font_family()))
-            tf.setSize(11 if st == QgsLegendStyle.Title else 8)
+            tf.setSize(11 if st == LEGEND_STYLES[0] else 8)
             ls.setTextFormat(tf)
             lg.setStyle(st, ls)
     except AttributeError:  # QGIS < 3.30
-        for st in (QgsLegendStyle.Title, QgsLegendStyle.Group, QgsLegendStyle.Subgroup, QgsLegendStyle.SymbolLabel):
+        for st in LEGEND_STYLES:
             f = QFont(_font_family())
-            f.setPointSizeF(11 if st == QgsLegendStyle.Title else 8)
+            f.setPointSizeF(11 if st == LEGEND_STYLES[0] else 8)
             lg.setStyleFont(st, f)
     lg.setSymbolHeight(4)
     lg.setSymbolWidth(7)
     layout.addLayoutItem(lg)
-    lg.attemptMove(QgsLayoutPoint(sx, y, QgsUnitTypes.LayoutMillimeters))
+    lg.attemptMove(QgsLayoutPoint(sx, y, LAYOUT_MM))
     lg.setResizeToContents(True)
     lg.adjustBoxSize()
     try:
@@ -216,7 +224,7 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     table = QgsLayoutItemTextTable(layout)
     layout.addMultiFrame(table)
     cols = []
-    for head, wmm in (("級別", 12), ("坡度範圍", 27), ("坵塊數", 11), ("面積(m²)", 20), ("比例(%)", 14)):
+    for head, wmm in (("級別", 11), ("坡度範圍", 25), ("坵塊數", 11), ("面積(m²)", 19), ("比例(%)", 13)):
         c = QgsLayoutTableColumn(head)
         c.setWidth(wmm)
         cols.append(c)
@@ -240,8 +248,8 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     table.setGridStrokeWidth(0.2)
     table.setCellMargin(1.0)
     fr = QgsLayoutFrame(layout, table)
-    fr.attemptMove(QgsLayoutPoint(sx, y, QgsUnitTypes.LayoutMillimeters))
-    fr.attemptResize(QgsLayoutSize(side_w, 62, QgsUnitTypes.LayoutMillimeters))
+    fr.attemptMove(QgsLayoutPoint(sx, y, LAYOUT_MM))
+    fr.attemptResize(QgsLayoutSize(side_w, 62, LAYOUT_MM))
     table.addFrame(fr)
     table.recalculateFrameSizes()
     y += 62
@@ -273,7 +281,7 @@ def export_layout(layout, path):
     ext = os.path.splitext(path)[1].lower()
     if ext == ".pdf":
         st = QgsLayoutExporter.PdfExportSettings()
-        return exp.exportToPdf(path, st) == QgsLayoutExporter.Success
+        return exp.exportToPdf(path, st) == E(QgsLayoutExporter, "ExportResult.Success", "Success")
     st = QgsLayoutExporter.ImageExportSettings()
     st.dpi = 200
     st.generateWorldFile = False
@@ -281,4 +289,4 @@ def export_layout(layout, path):
         st.exportMetadata = False
     except AttributeError:
         pass
-    return exp.exportToImage(path, st) == QgsLayoutExporter.Success
+    return exp.exportToImage(path, st) == E(QgsLayoutExporter, "ExportResult.Success", "Success")

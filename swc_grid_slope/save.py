@@ -5,6 +5,8 @@
 import os
 import re
 
+from .compat import E
+
 from qgis.core import (
     QgsCoordinateTransformContext,
     QgsProviderRegistry,
@@ -72,11 +74,12 @@ def save_project_to_gpkg(project, qgz_path, include_all=True, layers=None, feedb
         opts.driverName = "GPKG"
         opts.layerName = tbl
         opts.fileEncoding = "UTF-8"
-        opts.actionOnExistingFile = (QgsVectorFileWriter.CreateOrOverwriteFile if first
-                                     else QgsVectorFileWriter.CreateOrOverwriteLayer)
+        opts.actionOnExistingFile = (
+            E(QgsVectorFileWriter, "ActionOnExistingFile.CreateOrOverwriteFile", "CreateOrOverwriteFile") if first
+            else E(QgsVectorFileWriter, "ActionOnExistingFile.CreateOrOverwriteLayer", "CreateOrOverwriteLayer"))
         res = QgsVectorFileWriter.writeAsVectorFormatV3(lyr, gpkg, ctx, opts)
         err = res[0]
-        if err != QgsVectorFileWriter.NoError:
+        if err != E(QgsVectorFileWriter, "WriterError.NoError", "NoError"):
             msgs.append("圖層「{}」寫入失敗：{}".format(lyr.name(), res[1]))
             continue
         first = False
