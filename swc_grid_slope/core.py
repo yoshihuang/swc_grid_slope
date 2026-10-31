@@ -44,6 +44,17 @@ GRADE_COLORS = {
 }
 
 ASPECT_NAMES = ["北", "東北", "東", "東南", "南", "西南", "西", "西北"]
+ASPECT_FLAT = "平坦"
+ASPECT_ORDER = ASPECT_NAMES + [ASPECT_FLAT]
+ASPECT_RANGES = {
+    "北": "337.5°～22.5°", "東北": "22.5°～67.5°", "東": "67.5°～112.5°", "東南": "112.5°～157.5°",
+    "南": "157.5°～202.5°", "西南": "202.5°～247.5°", "西": "247.5°～292.5°", "西北": "292.5°～337.5°",
+    ASPECT_FLAT: "無坡向",
+}
+ASPECT_COLORS = {
+    "北": "#e41a1c", "東北": "#ff7f00", "東": "#ffd92f", "東南": "#4daf4a",
+    "南": "#1bc6c6", "西南": "#377eb8", "西": "#3f3fbf", "西北": "#c51b8a", ASPECT_FLAT: "#bdbdbd",
+}
 
 PI_314 = 3.14
 
@@ -73,9 +84,16 @@ def grade_name(g):
     return GRADES[g][0]
 
 
+def aspect_dir(azimuth):
+    """八方位箭頭方向（0、45、…、315 度；平坦回傳 None）"""
+    if azimuth is None:
+        return None
+    return float((int(((azimuth % 360.0) + 22.5) // 45.0) % 8) * 45)
+
+
 def aspect_name(azimuth):
     if azimuth is None:
-        return "平坦"
+        return ASPECT_FLAT
     idx = int(((azimuth % 360.0) + 22.5) // 45.0) % 8
     return ASPECT_NAMES[idx]
 
@@ -130,6 +148,42 @@ class Frame(object):
             self.cx = tl.x() + lx * c - ly * s
             self.cy = tl.y() + lx * s + ly * c
         return self
+
+    def contains(self, geom, tol=1e-6):
+        """矩形是否完全包含 geom"""
+        hw, hh = self.w / 2.0, self.h / 2.0
+        for v in geom.vertices():
+            lx, ly = self.to_local(v.x(), v.y())
+            if lx < -hw - tol or lx > hw + tol or ly < -hh - tol or ly > hh + tol:
+                return False
+        return True
+
+    def expanded_to_contain(self, geom, cell=None):
+        """回傳擴充後足以包含 geom 的新範圍（方向不變）；cell 不為 None 時以整格擴充，
+        維持原方格線位置（左上角只會以 L 的整數倍移動）。"""
+        hw, hh = self.w / 2.0, self.h / 2.0
+        left, right, top, bot = -hw, hw, hh, -hh
+        xs, ys = [], []
+        for v in geom.vertices():
+            lx, ly = self.to_local(v.x(), v.y())
+            xs.append(lx)
+            ys.append(ly)
+        if not xs:
+            return self.copy()
+        minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
+        if cell:
+            L = float(cell)
+            if minx < left:
+                left -= math.ceil((left - minx) / L - 1e-9) * L
+            if maxy > top:
+                top += math.ceil((maxy - top) / L - 1e-9) * L
+            right = left + math.ceil((max(right, maxx) - left) / L - 1e-9) * L
+            bot = top - math.ceil((top - min(bot, miny)) / L - 1e-9) * L
+        else:
+            left, right = min(left, minx), max(right, maxx)
+            bot, top = min(bot, miny), max(top, maxy)
+        c = self.to_map((left + right) / 2.0, (top + bot) / 2.0)
+        return Frame(c.x(), c.y(), right - left, top - bot, self.angle)
 
     @staticmethod
     def from_geometry(geom):
@@ -187,6 +241,22 @@ class Grid(object):
     def cell_polygon(self, r, c):
         p = [self.node(r, c), self.node(r, c + 1), self.node(r + 1, c + 1), self.node(r + 1, c)]
         return QgsGeometry.fromPolygonXY([p + [p[0]]])
+
+    def overlay_cells(self, plan_geom):
+        """與計畫範圍有交集（面積 > 0）之坵塊 [(r, c)]；plan_geom 為 None 時回傳全部"""
+        if plan_geom is None or plan_geom.isEmpty():
+            return [(r, c) for r in range(self.rows) for c in range(self.cols)]
+        eng = QgsGeometry.createGeometryEngine(plan_geom.constGet())
+        eng.prepareGeometry()
+        out = []
+        for r in range(self.rows):
+            for c in range(self.cols):
+                poly = self.cell_polygon(r, c)
+                if not eng.intersects(poly.constGet()):
+                    continue
+                if eng.contains(poly.constGet()) or poly.intersection(plan_geom).area() > 1e-6:
+                    out.append((r, c))
+        return out
 
     def cell_center(self, r, c):
         f = self.frame
@@ -294,11 +364,11 @@ def detect_interval(layer, elev_field):
     return best
 
 
-def count_intersections(grid, contours, feedback=None):
+def count_intersections(grid, contours, feedback=None, edges=None):
     """回傳 (edge_counts{key:n}, edge_points{key:[QgsPointXY]})"""
     tol = 1e-4
     counts, pts = {}, {}
-    edges = list(grid.edges())
+    edges = list(grid.edges()) if edges is None else list(edges)
     total = len(edges)
     for i, key in enumerate(edges):
         a, b = grid.edge_points(key)
@@ -400,6 +470,13 @@ EDGE_FIELDS = [("edge_id", "string"), ("dir", "string"), ("n", "int"),
 
 POINT_FIELDS = [("edge_id", "string"), ("elev", "double")]
 
+ASPECT_POINT_FIELDS = [("cell_no", "int"), ("row", "int"), ("col", "int"), ("aspect_deg", "double"),
+                       ("aspect_dir", "double"), ("aspect", "string"), ("S_pct", "double"),
+                       ("grade", "int"), ("L", "double")]
+
+ASPECT_CELL_FIELDS = [("cell_no", "int"), ("aspect_deg", "double"), ("aspect", "string"),
+                      ("area_m2", "double"), ("plan_area", "double")]
+
 FRAME_FIELDS = [("cx", "double"), ("cy", "double"), ("w", "double"),
                 ("h", "double"), ("angle", "double"), ("cell", "double"),
                 ("rows", "int"), ("cols", "int")]
@@ -421,7 +498,10 @@ class AnalysisResult(object):
         self.edges = None
         self.points = None
         self.frame_layer = None
+        self.aspect_points = None
+        self.aspect_cells = None
         self.stats = []        # list of dicts per grade
+        self.aspect_stats = []
         self.summary = {}
 
 
@@ -443,13 +523,24 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
 
     if feedback is not None:
         feedback.setProgress(5)
-    counts, epts = count_intersections(grid, contours, feedback)
+    # 僅處理與計畫範圍有交集之坵塊
+    keep = grid.overlay_cells(plan_geom)
+    if not keep:
+        raise RuntimeError("方格範圍內沒有與計畫範圍交集的坵塊。")
+    edge_keys = []
+    seen_e = set()
+    for r, c in keep:
+        for k in Grid.cell_edges(r, c):
+            if k not in seen_e:
+                seen_e.add(k)
+                edge_keys.append(k)
+    counts, epts = count_intersections(grid, contours, feedback, edge_keys)
 
     # ---- edges & points ---------------------------------------------------
     edges = new_memory_layer("LineString", crs, names.get("edges", "坵塊邊交點數"), EDGE_FIELDS)
     pts = new_memory_layer("Point", crs, names.get("points", "等高線交點"), POINT_FIELDS)
     efeats, pfeats = [], []
-    for key in grid.edges():
+    for key in edge_keys:
         a, b = grid.edge_points(key)
         eid = "{}{}_{}".format(*key)
         f = QgsFeature(edges.fields())
@@ -482,9 +573,9 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
 
     cfeats = []
     no = 0
-    total = grid.rows * grid.cols
-    for r in range(grid.rows):
-        for c in range(grid.cols):
+    total = len(keep)
+    for r, c in keep:
+        if True:  # keep indentation of the per-cell block
             no += 1
             ek = Grid.cell_edges(r, c)
             side = [counts.get(k, 0) for k in ek]
@@ -548,13 +639,54 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
     fl.dataProvider().addFeatures([gf])
     fl.updateExtents()
 
+    # ---- aspect map layers (第 26 條) ---------------------------------------
+    ap = new_memory_layer("Point", crs, names.get("aspect_points", "坵塊坡向（箭頭）"), ASPECT_POINT_FIELDS)
+    ac = new_memory_layer("Polygon", crs, names.get("aspect_cells", "坵塊坡向分區"), ASPECT_CELL_FIELDS)
+    apf, acf = [], []
+    for f in cfeats:
+        p = QgsFeature(ap.fields())
+        p.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(f["cx"], f["cy"])))
+        p.setAttributes([f["cell_no"], f["row"], f["col"], f["aspect_deg"], aspect_dir(f["aspect_deg"]),
+                         f["aspect"], f["S_pct"], f["grade"], f["L"]])
+        apf.append(p)
+        q = QgsFeature(ac.fields())
+        q.setGeometry(f.geometry())
+        q.setAttributes([f["cell_no"], f["aspect_deg"], f["aspect"], f["area_m2"], f["plan_area"]])
+        acf.append(q)
+    ap.dataProvider().addFeatures(apf)
+    ac.dataProvider().addFeatures(acf)
+    ap.updateExtents()
+    ac.updateExtents()
+
     res.cells, res.edges, res.points, res.frame_layer = cells, edges, pts, fl
+    res.aspect_points, res.aspect_cells = ap, ac
     res.stats, res.summary = statistics(cfeats, plan_geom is not None)
+    res.aspect_stats = aspect_statistics(cfeats, plan_geom is not None)
     res.summary.update({"rows": grid.rows, "cols": grid.cols, "cell": cell, "dh": dh,
-                        "pi": pi, "n_points": len(pfeats)})
+                        "pi": pi, "n_points": len(pfeats), "n_cells": len(cfeats)})
     if feedback is not None:
         feedback.setProgress(100)
     return res
+
+
+def aspect_statistics(cell_features, use_plan):
+    """依八方位（含平坦）統計坵塊數與面積"""
+    acc = OrderedDict((k, {"name": k, "range": ASPECT_RANGES[k], "count": 0, "area": 0.0})
+                      for k in ASPECT_ORDER)
+    tot = 0.0
+    for f in cell_features:
+        k = f["aspect"] or ASPECT_FLAT
+        a = f["plan_area"] if use_plan else f["area_m2"]
+        if a is None or a <= 0:
+            continue
+        acc[k]["count"] += 1
+        acc[k]["area"] += a
+        tot += a
+    rows = []
+    for d in acc.values():
+        d["pct"] = d["area"] / tot * 100.0 if tot > 0 else 0.0
+        rows.append(d)
+    return rows
 
 
 def statistics(cell_features, use_plan):

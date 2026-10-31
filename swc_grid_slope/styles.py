@@ -2,6 +2,7 @@
 """圖層符號與標註：重現坵塊圖（方格邊交點數、中央總交點數、分級與坡度）"""
 
 import functools
+import os
 
 from qgis.PyQt.QtCore import QSizeF
 from qgis.PyQt.QtGui import QColor, QFont
@@ -203,4 +204,52 @@ def style_plan(layer):
 def style_contours(layer):
     sym = QgsLineSymbol.createSimple({"line_color": "#7f7f7f", "line_width": "0.18"})
     layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    layer.triggerRepaint()
+
+
+# --------------------------------------------------------------------------
+# 坡向圖（第 26 條）：空心方塊箭頭指向下坡，八方位
+# --------------------------------------------------------------------------
+ARROW_SVG = os.path.join(os.path.dirname(__file__), "icons", "aspect_arrow.svg")
+
+
+def aspect_arrow_symbol(size_map_units=None):
+    from qgis.core import QgsSvgMarkerSymbolLayer
+    sl = QgsSvgMarkerSymbolLayer(ARROW_SVG)
+    sl.setFillColor(QColor("white"))
+    sl.setStrokeColor(QColor("black"))
+    sl.setStrokeWidth(0.3)
+    sl.setStrokeWidthUnit(UNIT_MM)
+    if size_map_units:
+        sl.setSize(size_map_units)
+        sl.setSizeUnit(UNIT_MAP)
+    else:
+        sl.setSize(5)
+    sym = QgsMarkerSymbol()
+    sym.changeSymbolLayer(0, sl)
+    return sym
+
+
+def style_aspect_points(layer, cell):
+    from qgis.core import QgsRuleBasedRenderer
+    root = QgsRuleBasedRenderer.Rule(None)
+    arrow = aspect_arrow_symbol(cell * 0.72)
+    arrow.setDataDefinedAngle(QgsProperty.fromField("aspect_dir"))
+    r1 = QgsRuleBasedRenderer.Rule(arrow, 0, 0, '"aspect_dir" IS NOT NULL', "坡向")
+    root.appendChild(r1)
+    flat = QgsMarkerSymbol.createSimple({"name": "circle", "color": "255,255,255,255",
+                                         "outline_color": "#000000", "outline_width": "0.3",
+                                         "size": str(cell * 0.18), "size_unit": "MapUnit"})
+    r2 = QgsRuleBasedRenderer.Rule(flat, 0, 0, '"aspect_dir" IS NULL', "平坦（無坡向）")
+    root.appendChild(r2)
+    layer.setRenderer(QgsRuleBasedRenderer(root))
+    layer.setLabelsEnabled(False)
+    layer.triggerRepaint()
+
+
+def style_aspect_cells(layer):
+    sym = QgsFillSymbol.createSimple({"color": "0,0,0,0", "style": "no", "outline_color": "#808080",
+                                      "outline_width": "0.2", "outline_width_unit": "MM"})
+    layer.setRenderer(QgsSingleSymbolRenderer(sym))
+    layer.setLabelsEnabled(False)
     layer.triggerRepaint()

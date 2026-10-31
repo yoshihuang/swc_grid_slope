@@ -44,11 +44,12 @@ from qgis.gui import QgsFieldComboBox, QgsMapLayerComboBox
 
 from . import core, styles
 from .compat import DIST_METERS
-from .layout import LAYOUT_NAME, build_layout, export_layout
+from .layout import ASPECT_LAYOUT_NAME, LAYOUT_NAME, build_aspect_layout, build_layout, export_layout
 from .maptools import DrawFrameTool, EditFrameTool, FrameController
 from .save import output_paths, save_project_to_folder
 
 GROUP_NAME = "坵塊法坡度分析"
+ASPECT_GROUP = "坡向圖"
 
 
 def _filters(name):
@@ -73,6 +74,8 @@ class SlopeDock(QDockWidget):
         self._block = False
         self._build_ui()
         self.ctrl.changed.connect(self._frame_to_ui)
+        self.ctrl.expanded.connect(self._frame_expanded)
+        self.cb_plan.layerChanged.connect(self._plan_changed)
         self.canvas.mapToolSet.connect(self._tool_changed)
         self.ctrl.cell = self.cell_size()
 
@@ -187,15 +190,13 @@ class SlopeDock(QDockWidget):
         f4.addRow("標註樣式", self.cb_style)
         self.ck_color = QCheckBox("依坡度分級著色")
         self.ck_color.setChecked(True)
-        self.ck_aspect = QCheckBox("計算坡向（第 26 條）")
-        self.ck_aspect.setChecked(True)
         self.ck_points = QCheckBox("顯示交點")
         self.ck_points.setChecked(True)
         h = QHBoxLayout()
-        for c in (self.ck_color, self.ck_aspect, self.ck_points):
+        for c in (self.ck_color, self.ck_points):
             h.addWidget(c)
         f4.addRow(h)
-        self.bt_run = QPushButton("產生坵塊並計算坡度")
+        self.bt_run = QPushButton("產出坵塊並計算坡度及坡向")
         self.bt_run.setStyleSheet("font-weight:bold;padding:6px")
         self.bt_run.clicked.connect(self.run)
         f4.addRow(self.bt_run)
@@ -220,7 +221,9 @@ class SlopeDock(QDockWidget):
         g5 = QGroupBox("5. 出圖版面")
         f5 = QFormLayout(g5)
         self.le_title = QLineEdit(LAYOUT_NAME)
-        f5.addRow("圖名", self.le_title)
+        f5.addRow("坡度圖名", self.le_title)
+        self.le_title2 = QLineEdit(ASPECT_LAYOUT_NAME)
+        f5.addRow("坡向圖名", self.le_title2)
         self.le_sub = QLineEdit("")
         self.le_sub.setPlaceholderText("例：○○段○○地號 水土保持計畫")
         f5.addRow("副標", self.le_sub)
@@ -230,7 +233,7 @@ class SlopeDock(QDockWidget):
         self.ck_align = QCheckBox("地圖旋轉使方格正置")
         f5.addRow(self.ck_align)
         h = QHBoxLayout()
-        self.bt_layout = QPushButton("建立版面")
+        self.bt_layout = QPushButton("建立版面（坡度圖＋坡向圖）")
         self.bt_layout.clicked.connect(self._make_layout)
         self.bt_export = QPushButton("匯出 PDF/PNG")
         self.bt_export.clicked.connect(self._export_layout)
@@ -252,9 +255,6 @@ class SlopeDock(QDockWidget):
         f6.addRow("輸出資料夾", h)
         self.le_pname = QLineEdit("坵塊法坡度分析")
         f6.addRow("專案名稱", self.le_pname)
-        self.ck_all = QCheckBox("專案內所有本機圖層（含輸入等高線/DEM/計畫範圍）一併寫入 gpkg")
-        self.ck_all.setChecked(True)
-        f6.addRow(self.ck_all)
         self.bt_save = QPushButton("儲存專案（資料夾內：專案名稱.qgz + 專案名稱.gpkg）")
         self.bt_save.clicked.connect(self._save_project)
         f6.addRow(self.bt_save)
@@ -317,12 +317,12 @@ class SlopeDock(QDockWidget):
     def _cell_changed(self):
         self.ctrl.cell = self.cell_size()
         if self.ctrl.frame is not None:
-            self.ctrl.set_frame(self.ctrl.frame.copy())
+            self.ctrl.set_frame(self.ctrl.frame.copy(), final=True)
 
     def _snap_changed(self, on):
         self.ctrl.snap = on
         if on and self.ctrl.frame is not None:
-            self.ctrl.set_frame(self.ctrl.frame.copy())
+            self.ctrl.set_frame(self.ctrl.frame.copy(), final=True)
 
     def _check_crs(self):
         crs = self.canvas.mapSettings().destinationCrs()
@@ -375,7 +375,7 @@ class SlopeDock(QDockWidget):
             L = self.ctrl.cell
             f.w = math.ceil(f.w / L - 1e-6) * L
             f.h = math.ceil(f.h / L - 1e-6) * L
-        self.ctrl.set_frame(f, snap=False)
+        self.ctrl.set_frame(f, snap=False, final=True)
         self.canvas.setExtent(f.geometry().buffer(self.ctrl.cell, 1).boundingBox())
         self.canvas.refresh()
 
@@ -393,6 +393,13 @@ class SlopeDock(QDockWidget):
             g.transform(QgsCoordinateTransform(lyr.crs(), crs, QgsProject.instance()))
         return g
 
+    def _plan_changed(self, *args):
+        self.ctrl.set_plan(self._plan_geometry())
+        self._frame_to_ui()
+
+    def _frame_expanded(self):
+        self._msg("矩形方格之範圍須包含計畫範圍圖層，已自動擴充方格範圍。", Qgis.MessageLevel.Warning, 8)
+
     def _frame_to_ui(self):
         f = self.ctrl.frame
         self._block = True
@@ -405,7 +412,12 @@ class SlopeDock(QDockWidget):
             self.sp_h.setValue(f.h)
             self.sp_ang.setValue(f.angle)
             r, c = self.ctrl.rows_cols()
-            self.lb_grid.setText("{} 列 × {} 行 = {} 格（L = {:g} m）".format(r, c, r * c, self.ctrl.cell))
+            if self.ctrl.plan_geom is not None:
+                self.lb_grid.setText("{} 列 × {} 行；與計畫範圍交集 {} 格（L = {:g} m）".format(
+                    r, c, self.ctrl.overlay_count, self.ctrl.cell))
+            else:
+                self.lb_grid.setText("{} 列 × {} 行 = {} 格（L = {:g} m；未指定計畫範圍）".format(
+                    r, c, r * c, self.ctrl.cell))
         self._block = False
 
     def _ui_to_frame(self):
@@ -413,7 +425,7 @@ class SlopeDock(QDockWidget):
             return
         f = core.Frame(self.sp_cx.value(), self.sp_cy.value(), self.sp_w.value(),
                        self.sp_h.value(), self.sp_ang.value())
-        self.ctrl.set_frame(f, snap=self.ctrl.snap)
+        self.ctrl.set_frame(f, snap=self.ctrl.snap, final=True)
 
     # ------------------------------------------------------------------ run
     def run(self):
@@ -425,6 +437,9 @@ class SlopeDock(QDockWidget):
         crs = self.canvas.mapSettings().destinationCrs()
         cell = self.cell_size()
         dh = self.sp_dh.value()
+        # 再次確認範圍包含計畫範圍（未包含則自動擴充）
+        self.ctrl.cell = cell
+        self.ctrl.set_plan(self._plan_geometry())
         frame = self.ctrl.frame.copy()
         fb = QgsFeedback()
         fb.progressChanged.connect(lambda p: self.pb.setValue(int(p)))
@@ -440,6 +455,8 @@ class SlopeDock(QDockWidget):
                     self._msg("請選擇等高線圖層", Qgis.MessageLevel.Warning)
                     return
                 elev = self.cb_elev.currentField() or None
+                if not elev:
+                    self._msg("等高線未指定高程欄位，無法判斷坡向（將標示為平坦）。", Qgis.MessageLevel.Warning, 8)
                 cs = core.ContourSet.from_layer(contour_layer, crs, elev, ext, fb)
             else:
                 dem = self.cb_dem.currentLayer()
@@ -455,7 +472,7 @@ class SlopeDock(QDockWidget):
             plan = self._plan_geometry()
             res = core.run_analysis(frame, cell, dh, crs, cs, pi=self.pi_value(), plan_geom=plan,
                                     dem=dem, dem_band=self.sp_band.value(),
-                                    compute_aspect=self.ck_aspect.isChecked(), feedback=fb)
+                                    compute_aspect=True, feedback=fb)
         except Exception as ex:  # noqa
             import traceback
             QMessageBox.critical(self, "計算失敗", "{}\n\n{}".format(ex, traceback.format_exc()))
@@ -470,8 +487,8 @@ class SlopeDock(QDockWidget):
         self.ctrl.remove_layer_only()
         if self.canvas.mapTool() in (self.draw_tool, self.edit_tool):
             self.canvas.unsetMapTool(self.canvas.mapTool())
-        self._msg("完成：{} 列 × {} 行，交點 {} 個".format(res.summary["rows"], res.summary["cols"],
-                                                       res.summary["n_points"]), Qgis.MessageLevel.Success)
+        self._msg("完成：坵塊 {} 格（與計畫範圍交集），交點 {} 個；已產出坡度與坡向圖層".format(
+            res.summary["n_cells"], res.summary["n_points"]), Qgis.MessageLevel.Success)
 
     def _add_results(self, res, generated):
         prj = QgsProject.instance()
@@ -497,6 +514,15 @@ class SlopeDock(QDockWidget):
             prj.addMapLayer(lyr, False)
             grp.addLayer(lyr)
             self.result_ids[key] = lyr.id()
+        # 坡向圖（點圖層＋坵塊格線），預設關閉顯示以免與坡度標註重疊
+        styles.style_aspect_points(res.aspect_points, cell)
+        styles.style_aspect_cells(res.aspect_cells)
+        sub = grp.findGroup(ASPECT_GROUP) or grp.insertGroup(0, ASPECT_GROUP)
+        for key, lyr in (("aspect_points", res.aspect_points), ("aspect_cells", res.aspect_cells)):
+            prj.addMapLayer(lyr, False)
+            sub.addLayer(lyr)
+            self.result_ids[key] = lyr.id()
+        sub.setItemVisibilityChecked(False)
         node = root.findLayer(res.points.id())
         if node is not None:
             node.setItemVisibilityChecked(self.ck_points.isChecked())
@@ -534,6 +560,10 @@ class SlopeDock(QDockWidget):
                 w.writerow([d["name"], d["range"], d["count"], round(d["area"], 2), round(d["pct"], 2)])
             w.writerow(["合計", "", sum(d["count"] for d in self.result.stats),
                         round(self.result.summary["total_area"], 2), 100])
+            w.writerow([])
+            w.writerow(["坡向", "方位角", "坵塊數", "面積(m2)", "比例(%)"])
+            for d in self.result.aspect_stats:
+                w.writerow([d["name"], d["range"], d["count"], round(d["area"], 2), round(d["pct"], 2)])
         self._msg("已匯出 {}".format(path), Qgis.MessageLevel.Success)
 
     # --------------------------------------------------------------- layout
@@ -552,22 +582,42 @@ class SlopeDock(QDockWidget):
             self._msg("請先完成坡度計算", Qgis.MessageLevel.Warning)
             return None
         paper = {0: (420.0, 297.0), 1: (297.0, 210.0), 2: (841.0, 594.0)}[self.cb_paper.currentIndex()]
-        lay = build_layout(QgsProject.instance(), self._result_layers(), self.result_frame,
+        prj = QgsProject.instance()
+        rl = self._result_layers()
+        lay = build_layout(prj, rl, self.result_frame,
                            self.result.stats, self.result.summary, title=self.le_title.text() or LAYOUT_NAME,
                            subtitle=self.le_sub.text(), align_to_grid=self.ck_align.isChecked(), paper=paper)
+        lay2 = build_aspect_layout(prj, rl, self.result_frame, self.result.aspect_stats, self.result.summary,
+                                   title=self.le_title2.text() or ASPECT_LAYOUT_NAME, subtitle=self.le_sub.text(),
+                                   align_to_grid=self.ck_align.isChecked(), paper=paper)
         self.iface.openLayoutDesigner(lay)
-        return lay
+        self.iface.openLayoutDesigner(lay2)
+        return lay, lay2
 
     def _export_layout(self):
         mgr = QgsProject.instance().layoutManager()
-        lay = mgr.layoutByName(self.le_title.text() or LAYOUT_NAME) or self._make_layout()
-        if lay is None:
-            return
-        path, _ = QFileDialog.getSaveFileName(self, "匯出版面", "", "PDF (*.pdf);;PNG (*.png)")
+        lay = mgr.layoutByName(self.le_title.text() or LAYOUT_NAME)
+        lay2 = mgr.layoutByName(self.le_title2.text() or ASPECT_LAYOUT_NAME)
+        if lay is None or lay2 is None:
+            made = self._make_layout()
+            if made is None:
+                return
+            lay, lay2 = made
+        path, flt = QFileDialog.getSaveFileName(self, "匯出版面（坡度圖；坡向圖自動加上「_坡向圖」）", "",
+                                                "PDF (*.pdf);;PNG (*.png)")
         if not path:
             return
-        ok = export_layout(lay, path)
-        self._msg(("已匯出 " if ok else "匯出失敗 ") + path, Qgis.MessageLevel.Success if ok else Qgis.MessageLevel.Critical)
+        root, ext = os.path.splitext(path)
+        if ext.lower() not in (".pdf", ".png"):
+            ext = ".png" if "png" in (flt or "").lower() else ".pdf"
+        p1, p2 = root + ext, root + "_坡向圖" + ext
+        ok1 = export_layout(lay, p1)
+        ok2 = export_layout(lay2, p2)
+        if ok1 and ok2:
+            self._msg("已匯出坡度圖 {} 及坡向圖 {}".format(p1, p2), Qgis.MessageLevel.Success, 10)
+        else:
+            self._msg("匯出失敗：{}".format("、".join(p for p, ok in ((p1, ok1), (p2, ok2)) if not ok)),
+                      Qgis.MessageLevel.Critical)
 
     # ---------------------------------------------------------------- save
     def _choose_folder(self):
@@ -595,8 +645,12 @@ class SlopeDock(QDockWidget):
                       self.cb_dem.currentLayer() if self.rb_dem.isChecked() else None):
             if extra is not None:
                 layers.append(extra)
+        # 其他記憶體暫存圖層不寫入就會遺失，一併保存
+        for lyr in prj.mapLayers().values():
+            if lyr.providerType() == "memory" and lyr not in layers and lyr is not self.ctrl.layer():
+                layers.append(lyr)
         try:
-            qgz, gpkg, msgs = save_project_to_folder(prj, folder, name, include_all=self.ck_all.isChecked(),
+            qgz, gpkg, msgs = save_project_to_folder(prj, folder, name, include_all=False,
                                                      layers=layers, feedback=lambda p: self.pb.setValue(p))
         except Exception as ex:  # noqa
             QMessageBox.critical(self, "儲存失敗", str(ex))

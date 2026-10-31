@@ -75,11 +75,21 @@ def output_paths(folder, name):
         cand = "{}_{}".format(base, i)
 
 
+def _cleanup(gpkg):
+    for p in (gpkg, gpkg + "-wal", gpkg + "-shm"):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+        except OSError:
+            pass
+
+
 def save_project_to_folder(project, folder, name, include_all=True, layers=None, feedback=None):
     """
     於 folder 內輸出 <name>.qgz 與 <name>.gpkg。
     步驟：(1) 先寫網格（建立 gpkg）→ (2) 寫向量（更新模式加入圖層）
          → (3) 全部成功後才把專案圖層改指向 gpkg → (4) 存專案檔。
+    失敗時刪除未完成的 gpkg。
     任何寫入失敗都不會改動目前專案。
     回傳 (qgz_path, gpkg_path, [訊息])
     """
@@ -88,9 +98,11 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
     if not os.path.isdir(folder):
         os.makedirs(folder)
     qgz_path, gpkg = output_paths(folder, name)
-    # temporary file (must keep the .gpkg extension for the GPKG driver)
-    tmp = os.path.join(folder, "~writing_" + os.path.basename(gpkg))
-    for p in (tmp, gpkg):
+    # write straight into the final file (no temp + rename: on Windows QGIS/GDAL
+    # may still hold the file open right after writing, which makes rename fail).
+    # The project is only re-pointed after every write succeeded.
+    tmp = gpkg
+    for p in (gpkg, gpkg + "-wal", gpkg + "-shm"):
         if os.path.exists(p):
             os.remove(p)
 
@@ -191,17 +203,13 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
     lost = [l for l in vectors + rasters if l not in [p[0] for p in plan]
             and (l.providerType() == "memory" or id(l) in must)]
     if lost:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
+        _cleanup(gpkg)
         raise RuntimeError("下列圖層無法寫入 gpkg，未儲存任何檔案：\n" + "\n".join(skipped))
 
     if not plan:
+        _cleanup(gpkg)
         raise RuntimeError("專案中沒有可寫入的本機圖層。\n" + "\n".join(skipped))
 
-    # the file is complete – give it its final name
-    os.replace(tmp, gpkg)
 
     # (3) repoint layers, keeping their style / labels
     from qgis.PyQt.QtXml import QDomDocument

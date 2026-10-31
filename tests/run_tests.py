@@ -103,6 +103,35 @@ for d in res4.stats:
 print("  mean slope", round(res4.summary["mean_slope"], 2))
 assert abs(sum(d["area"] for d in res4.stats) - pg.area()) < 1.0
 
+# only cells overlapping the plan are produced
+eng = QgsGeometry.createGeometryEngine(pg.constGet()); eng.prepareGeometry()
+cnt = 0
+for f in res4.cells.getFeatures():
+    cnt += 1
+    assert f.geometry().intersection(pg).area() > 1e-6, f["cell_no"]
+full = res4.summary["rows"] * res4.summary["cols"]
+print("overlay cells", cnt, "of", full)
+assert cnt < full and cnt == res4.summary["n_cells"]
+assert res4.aspect_points.featureCount() == cnt and res4.aspect_cells.featureCount() == cnt
+dirs = sorted(set(f["aspect_dir"] for f in res4.aspect_points.getFeatures()), key=lambda v: (v is None, v))
+print("aspect dirs", dirs)
+assert all(v is None or v % 45 == 0 for v in dirs)
+print("aspect stats", [(d["name"], d["count"]) for d in res4.aspect_stats])
+assert sum(d["count"] for d in res4.aspect_stats) == cnt
+
+# frame auto-expansion: a small rotated frame inside the plan grows to contain it
+small = core.Frame(250180, 2700200, 50, 50, 12)
+assert not small.contains(pg)
+big = small.expanded_to_contain(pg, 25)
+assert big.contains(pg), "expanded frame must contain plan"
+assert abs(big.angle - 12) < 1e-9 and abs(big.w % 25) < 1e-6 and abs(big.h % 25) < 1e-6
+# grid lines stay on the original lattice: original top-left is a lattice node of the new frame
+tl0 = small.to_local(*[small.to_map(-25, 25).x(), small.to_map(-25, 25).y()])
+lx, ly = big.to_local(small.to_map(-25, 25).x(), small.to_map(-25, 25).y())
+assert abs(((lx + big.w / 2) / 25) - round((lx + big.w / 2) / 25)) < 1e-6
+assert abs(((big.h / 2 - ly) / 25) - round((big.h / 2 - ly) / 25)) < 1e-6
+print("expanded frame", round(big.w), round(big.h))
+
 # consistency: cell n = sum of side counts (no node hits expected)
 for f in res4.cells.getFeatures():
     assert f["n"] <= f["n_top"] + f["n_right"] + f["n_bottom"] + f["n_left"]
@@ -126,6 +155,17 @@ for st, tag in ((styles.LABEL_STYLE_TEXT, "A"), (styles.LABEL_STYLE_BIGGRADE, "B
                          title="坵塊法坡度分析圖" + tag)
     ok = lay.export_layout(L, os.path.join(OUT, "layout_%s.png" % tag))
     print("layout", tag, ok)
+    assert ok
+    styles.style_aspect_points(res4.aspect_points, 25)
+    styles.style_aspect_cells(res4.aspect_cells)
+    for l in (res4.aspect_points, res4.aspect_cells):
+        if prj.mapLayer(l.id()) is None:
+            prj.addMapLayer(l)
+    L2 = lay.build_aspect_layout(prj, dict(aspect_points=res4.aspect_points, aspect_cells=res4.aspect_cells,
+                                           plan=plan, contours=gen2), rf, res4.aspect_stats, res4.summary,
+                                 subtitle="測試案例", align_to_grid=(tag == "B"), title="坵塊法坡向分析圖" + tag)
+    ok = lay.export_layout(L2, os.path.join(OUT, "aspect_%s.png" % tag))
+    print("aspect layout", tag, ok)
     assert ok
 
 # save

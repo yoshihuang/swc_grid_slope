@@ -51,16 +51,57 @@ t.canvasReleaseEvent(ev(QEvent.Type.MouseButtonRelease, int(cp.x()) - 30, int(cp
 d.sp_ang.setValue(15); d._ui_to_frame(); assert abs(d.ctrl.frame.angle - 15) < 1e-9
 d.cb_cell.setCurrentIndex(0); assert d.ctrl.cell == 10
 d.cb_style.setCurrentIndex(1)
+# ---- plan polygon: frame must contain it, only overlay cells are produced
+plan = QgsVectorLayer("Polygon?crs=EPSG:3826", "計畫範圍", "memory")
+pf = QgsFeature(); pf.setGeometry(QgsGeometry.fromWkt(
+    "POLYGON((250120 2700150,250260 2700180,250280 2700290,250150 2700300,250120 2700150))"))
+plan.dataProvider().addFeatures([pf]); QgsProject.instance().addMapLayer(plan)
+pg = QgsGeometry(pf.geometry())
+warned = []
+d.ctrl.expanded.connect(lambda: warned.append(1))
+d.cb_plan.setLayer(plan)
+print("after plan selected:", d.lb_grid.text(), "warned", len(warned))
+assert d.ctrl.frame.contains(pg)
+# draw a tiny rectangle inside the plan → must auto-expand
+n0 = len(warned)
+d.bt_draw.setChecked(True); d._tool_draw()
+c = d.draw_tool.toCanvasCoordinates(QgsPointXY(250200, 2700230))
+d.draw_tool.canvasPressEvent(ev(QEvent.Type.MouseButtonPress, int(c.x()), int(c.y())))
+d.draw_tool.canvasReleaseEvent(ev(QEvent.Type.MouseButtonRelease, int(c.x()) + 20, int(c.y()) + 20))
+assert len(warned) > n0 and d.ctrl.frame.contains(pg), "draw must expand"
+print("draw expanded:", d.lb_grid.text())
+# move the frame away with the edit tool → re-expanded on release
+d._tool_edit(); t = d.edit_tool
+cp = t.toCanvasCoordinates(QgsPointXY(d.ctrl.frame.cx, d.ctrl.frame.cy))
+n1 = len(warned)
+t.canvasPressEvent(ev(QEvent.Type.MouseButtonPress, int(cp.x()), int(cp.y()))); assert t.handle == "move"
+t.canvasMoveEvent(ev(QEvent.Type.MouseMove, int(cp.x()) + 150, int(cp.y()) - 120))
+t.canvasReleaseEvent(ev(QEvent.Type.MouseButtonRelease, int(cp.x()) + 150, int(cp.y()) - 120))
+assert len(warned) > n1 and d.ctrl.frame.contains(pg), "move must re-expand"
+# numeric rotation → still contains
+d.sp_ang.setValue(25); d._ui_to_frame(); assert d.ctrl.frame.contains(pg)
+ov = d.ctrl.overlay_count
+r_, c_ = d.ctrl.rows_cols(); print("overlay", ov, "of", r_ * c_); assert ov < r_ * c_
 d.run()
 assert d.result is not None, "run failed"
+assert d.result.summary["n_cells"] == ov, (d.result.summary["n_cells"], ov)
+assert d.result.aspect_points.featureCount() == ov
+assert d.bt_run.text() == "產出坵塊並計算坡度及坡向"
+assert not hasattr(d, "ck_all") and not hasattr(d, "ck_aspect")
 print("result", d.result.summary["rows"], d.result.summary["cols"], round(d.result.summary["mean_slope"],2))
 print("table rows", d.tbl.rowCount(), d.lb_summary.text())
 with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "gui.csv"), "")):
     d._export_csv()
-lay = d._make_layout(); assert lay is not None
+lay = d._make_layout(); assert lay is not None and len(lay) == 2
+assert QgsProject.instance().layoutManager().layoutByName("坵塊法坡向分析圖") is not None
+lay = d._make_layout()   # rebuilding overwrites, never duplicates
+assert len(QgsProject.instance().layoutManager().layouts()) == 2
 with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "gui_layout.pdf"), "")):
     d._export_layout()
-assert os.path.exists(os.path.join(OUT, "gui_layout.pdf"))
+assert os.path.exists(os.path.join(OUT, "gui_layout.pdf")) and os.path.exists(os.path.join(OUT, "gui_layout_坡向圖.pdf"))
+with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "gui_layout.png"), "")):
+    d._export_layout()
+assert os.path.exists(os.path.join(OUT, "gui_layout_坡向圖.png"))
 import shutil; shutil.rmtree(os.path.join(OUT, "guiproj"), ignore_errors=True)
 d.le_pname.setText("A")
 for rnd in range(2):  # second round: files exist → overwrite prompt; gpkg in use → A_2

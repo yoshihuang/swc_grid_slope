@@ -10,7 +10,7 @@ from qgis.core import QgsFeature, QgsGeometry, QgsProject
 from qgis.gui import QgsMapTool, QgsRubberBand, QgsVertexMarker
 
 from .compat import E, GEOM_LINE, GEOM_POLYGON
-from .core import FRAME_FIELDS, Frame, new_memory_layer
+from .core import FRAME_FIELDS, Frame, Grid, new_memory_layer
 from .styles import style_frame
 
 FRAME_LAYER_NAME = "坵塊方格範圍（編輯中）"
@@ -22,6 +22,7 @@ class FrameController(QObject):
     """持有目前方格範圍（Frame）並同步至記憶體暫存圖層與預覽線"""
 
     changed = pyqtSignal()
+    expanded = pyqtSignal()   # 範圍因須包含計畫範圍而自動擴充
 
     def __init__(self, canvas):
         super().__init__()
@@ -29,6 +30,8 @@ class FrameController(QObject):
         self.frame = None
         self.cell = 25.0
         self.snap = True
+        self.plan_geom = None     # 計畫範圍（畫布座標系）
+        self.overlay_count = 0
         self._layer_id = None
         self.preview = QgsRubberBand(canvas, GEOM_LINE)
         self.preview.setColor(QColor(0, 120, 255, 160))
@@ -49,17 +52,31 @@ class FrameController(QObject):
             self._layer_id = lyr.id()
         return lyr
 
-    def set_frame(self, frame, snap=None, emit=True):
+    def set_plan(self, geom):
+        """設定計畫範圍；已有範圍時立即檢查是否包含"""
+        self.plan_geom = geom if geom is not None and not geom.isEmpty() else None
+        if self.frame is not None:
+            self.set_frame(self.frame.copy(), snap=False, final=True)
+
+    def set_frame(self, frame, snap=None, emit=True, final=False):
+        """final=True：使用者完成一次修改（繪製、放開滑鼠、輸入數值），
+        此時檢查範圍是否包含計畫範圍，未包含則自動擴充。"""
         if frame is None:
             return
         snap = self.snap if snap is None else snap
         if snap:
             frame.snap_to_cell(self.cell)
+        grew = False
+        if final and self.plan_geom is not None and not frame.contains(self.plan_geom):
+            frame = frame.expanded_to_contain(self.plan_geom, self.cell if self.snap else None)
+            grew = True
         self.frame = frame
         self._sync_layer()
         self._update_preview()
         if emit:
             self.changed.emit()
+        if grew:
+            self.expanded.emit()
 
     def rows_cols(self):
         if self.frame is None:
@@ -83,14 +100,26 @@ class FrameController(QObject):
         lyr.triggerRepaint()
 
     def _update_preview(self):
-        """預覽方格線"""
+        """預覽方格線；有計畫範圍時只畫與其交集之坵塊"""
         self.preview.reset(GEOM_LINE)
         f = self.frame
+        self.overlay_count = 0
         if f is None:
             return
         rows, cols = self.rows_cols()
         if rows * cols > 40000:
             return
+        if self.plan_geom is not None:
+            grid = Grid(f, self.cell)
+            keep = grid.overlay_cells(self.plan_geom)
+            self.overlay_count = len(keep)
+            pts = f.corners()
+            self.preview.addGeometry(QgsGeometry.fromPolylineXY(pts + [pts[0]]), None)
+            for r, c in keep:
+                ring = grid.cell_polygon(r, c).asPolygon()[0]
+                self.preview.addGeometry(QgsGeometry.fromPolylineXY(ring), None)
+            return
+        self.overlay_count = rows * cols
         L = self.cell
         for c in range(cols + 1):
             x = -f.w / 2 + c * L
@@ -155,7 +184,7 @@ class DrawFrameTool(QgsMapTool):
         if r.width() <= 0 or r.height() <= 0:
             return
         c = r.center()
-        self.ctrl.set_frame(Frame(c.x(), c.y(), r.width(), r.height(), 0.0))
+        self.ctrl.set_frame(Frame(c.x(), c.y(), r.width(), r.height(), 0.0), final=True)
 
     def deactivate(self):
         self.rb.reset(GEOM_POLYGON)
@@ -326,7 +355,7 @@ class EditFrameTool(QgsMapTool):
         if self.handle is not None:
             self.handle = None
             self.setCursor(Qt.CursorShape.OpenHandCursor)
-            self.ctrl.set_frame(self.ctrl.frame, snap=self.ctrl.snap)
+            self.ctrl.set_frame(self.ctrl.frame, snap=self.ctrl.snap, final=True)
 
     def keyPressEvent(self, e):
         f = self.ctrl.frame
@@ -340,5 +369,5 @@ class EditFrameTool(QgsMapTool):
         g = f.copy()
         g.cx += d[0]
         g.cy += d[1]
-        self.ctrl.set_frame(g, snap=False)
+        self.ctrl.set_frame(g, snap=False, final=True)
         e.accept()
