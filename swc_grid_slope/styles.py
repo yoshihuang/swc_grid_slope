@@ -28,6 +28,8 @@ from .core import GRADE_COLORS, GRADES
 
 FONT_FAMILY = "Noto Sans CJK TC"
 
+CELL_TEXT_RATIO = 0.155  # 文字式標註字高 ≈ 0.155 L（最寬的「S=100.48%」仍可容納於方格內）
+
 LABEL_STYLE_TEXT = 0      # 分級:3 / N=12 / S=18.84%
 LABEL_STYLE_BIGGRADE = 1  # 大字級數 + 圈號交點數 + (S%)
 
@@ -123,41 +125,41 @@ def style_cells(layer, cell, label_style=LABEL_STYLE_TEXT, colorize=True, show_n
     # labels -----------------------------------------------------------------
     root = QgsRuleBasedLabeling.Rule(None)
     if label_style == LABEL_STYLE_TEXT:
-        fmt = _fmt(cell * 0.085)
+        fmt = _fmt(cell * CELL_TEXT_RATIO)
         expr = "'分級:' || \"grade\" || '\\n' || 'N=' || \"n\" || '\\n' || 'S=' || to_string(round(\"S_pct\", 2)) || '%'"
         r = QgsRuleBasedLabeling.Rule(_point_pal(expr, 0, 0, fmt))
         r.setDescription("分級/N/S")
         root.appendChild(r)
         if show_no:
-            r2 = QgsRuleBasedLabeling.Rule(_point_pal("'NO.' || \"cell_no\"", -0.33, 0.38, _fmt(cell * 0.05)))
+            r2 = QgsRuleBasedLabeling.Rule(_point_pal("'NO.' || \"cell_no\"", -0.33, 0.41, _fmt(cell * 0.07)))
             r2.setDescription("編號")
             root.appendChild(r2)
     else:
-        big = _fmt(cell * 0.42, bold=False)
+        big = _fmt(cell * 0.50, bold=False)
         r = QgsRuleBasedLabeling.Rule(_point_pal("\"grade\"", 0.02, 0.04, big))
         r.setDescription("坡度級數")
         root.appendChild(r)
-        small = _fmt(cell * 0.065)
-        rs = QgsRuleBasedLabeling.Rule(_point_pal("'(' || to_string(round(\"S_pct\", 2)) || '%)'", 0.27, -0.27, small))
+        small = _fmt(cell * 0.10)
+        rs = QgsRuleBasedLabeling.Rule(_point_pal("'(' || to_string(round(\"S_pct\", 2)) || '%)'", 0.21, -0.32, small))
         rs.setDescription("平均坡度")
         root.appendChild(rs)
-        circ = _fmt(cell * 0.07, buffer=False)
+        circ = _fmt(cell * 0.10, buffer=False)
         bg = QgsTextBackgroundSettings()
         bg.setEnabled(True)
         bg.setType(E(QgsTextBackgroundSettings, "ShapeType.ShapeCircle", "ShapeCircle"))
         bg.setSizeType(E(QgsTextBackgroundSettings, "SizeType.SizeBuffer", "SizeBuffer"))
-        bg.setSize(QSizeF(cell * 0.025, cell * 0.025))
+        bg.setSize(QSizeF(cell * 0.03, cell * 0.03))
         bg.setSizeUnit(UNIT_MAP)
         bg.setFillColor(QColor("white"))
         bg.setStrokeColor(QColor("black"))
         bg.setStrokeWidth(0.25)
         bg.setStrokeWidthUnit(UNIT_MM)
         circ.setBackground(bg)
-        rn = QgsRuleBasedLabeling.Rule(_point_pal("\"n\"", -0.26, -0.3, circ))
+        rn = QgsRuleBasedLabeling.Rule(_point_pal("\"n\"", -0.31, -0.33, circ))
         rn.setDescription("交點總數")
         root.appendChild(rn)
         if show_no:
-            r2 = QgsRuleBasedLabeling.Rule(_point_pal("'NO.' || \"cell_no\"", -0.33, 0.36, _fmt(cell * 0.055)))
+            r2 = QgsRuleBasedLabeling.Rule(_point_pal("'NO.' || \"cell_no\"", -0.30, 0.39, _fmt(cell * 0.08)))
             r2.setDescription("編號")
             root.appendChild(r2)
     layer.setLabeling(QgsRuleBasedLabeling(root))
@@ -181,9 +183,9 @@ def style_edges(layer, cell, label_style=LABEL_STYLE_TEXT, size=None):
 
 def fit_edge_labels_to_scale(layer, cell, scale, target_mm=2.6):
     """依版面地圖比例尺調整邊界交點數字大小：出圖時字高約 target_mm，
-    但限制在 0.12 L～0.30 L 之間，避免過小或超出方格。"""
+    但限制在 0.12 L～0.24 L 之間，避免過小或超出方格。"""
     want = target_mm / 1000.0 * scale
-    size = min(max(want, cell * 0.12), cell * 0.30)
+    size = min(max(want, cell * 0.12), cell * 0.24)
     lab = layer.labeling()
     if lab is None:
         return size
