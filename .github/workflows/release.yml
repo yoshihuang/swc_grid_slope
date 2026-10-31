@@ -13,10 +13,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check metadata (same parser as plugins.qgis.org)
+        run: python tests/check_plugin_package.py swc_grid_slope
       - name: Build zip
         run: |
           cp README.md swc_grid_slope/README.md
           zip -r swc_grid_slope.zip swc_grid_slope -x "*/__pycache__/*"
+          python tests/check_plugin_package.py swc_grid_slope.zip
       - uses: actions/upload-artifact@v4
         with:
           name: swc_grid_slope
