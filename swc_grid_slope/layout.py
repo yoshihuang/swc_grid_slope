@@ -2,6 +2,7 @@
 """出圖版面配置（A3 橫式）：坵塊坡度分析圖 + 圖例 + 指北針 + 比例尺 + 分級統計表 + 計算說明"""
 
 import datetime
+import math
 import os
 
 from qgis.PyQt.QtGui import QFont
@@ -141,7 +142,7 @@ def _table(layout, x, y, w, h, columns, rows):
 
 def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layers,
            table_title, table_columns, table_rows, notes, align_to_grid, signature=False,
-           compact_legend=None):
+           compact_legend=None, extent_layer=None, legend_node_order=None):
     """共用版面：左側地圖，右側指北針／比例尺／圖例／統計表／說明（／專業技師簽證）"""
     layout = _new_layout(project, title, paper)
     W, H = paper
@@ -163,11 +164,23 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
     mp.setFrameEnabled(True)
     mp.setFrameStrokeWidth(_mm(0.5))
     ratio = map_w / map_h
+    # 圖面範圍：框住實際產出的坵塊（與計畫範圍交集者），而非整個方格範圍
     if align_to_grid:
-        gw, gh = frame.w * 1.12, frame.h * 1.12
-        cx, cy = frame.cx, frame.cy
+        xs, ys = [], []
+        if extent_layer is not None:
+            for f in extent_layer.getFeatures():
+                for v in f.geometry().vertices():
+                    lx, ly = frame.to_local(v.x(), v.y())
+                    xs.append(lx)
+                    ys.append(ly)
+        if not xs:
+            xs, ys = [-frame.w / 2, frame.w / 2], [-frame.h / 2, frame.h / 2]
+        gw, gh = (max(xs) - min(xs)) * 1.12, (max(ys) - min(ys)) * 1.12
+        c0 = frame.to_map((max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2)
+        cx, cy = c0.x(), c0.y()
     else:
-        bb = frame.geometry().boundingBox()
+        bb = extent_layer.extent() if extent_layer is not None and extent_layer.featureCount() else \
+            frame.geometry().boundingBox()
         gw, gh = bb.width() * 1.12, bb.height() * 1.12
         cx, cy = bb.center().x(), bb.center().y()
     if gw / gh > ratio:
@@ -209,7 +222,10 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
     sb.setUnitLabel("m")
     sb.setNumberOfSegments(2)
     sb.setNumberOfSegmentsLeft(0)
-    seg = 10.0 if frame.w < 300 else (25.0 if frame.w < 800 else 100.0)
+    # 比例尺刻度：約為圖面寬度的 1/10，取 1-2-5 整數
+    raw = gw / 10.0
+    mag = 10 ** math.floor(math.log10(max(raw, 1e-6)))
+    seg = min((v * mag for v in (1, 2, 2.5, 5, 10)), key=lambda v: abs(v - raw))
     sb.setUnitsPerSegment(seg)
     try:
         tf = sb.textFormat()
@@ -240,12 +256,17 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
                 QgsLegendRenderer.setNodeLegendStyle(node, hidden)
             except Exception:
                 pass
+            if legend_node_order is not None:
+                # 只列出圖上實際出現的項目（不使用「依地圖篩選圖例」，
+                # 該功能在 QGIS 3.x 匯出時會等待背景繪圖而卡住）
+                try:
+                    from qgis.core import QgsMapLayerLegendUtils
+                    QgsMapLayerLegendUtils.setLegendNodeOrder(node, legend_node_order)
+                    lg.model().refreshLayerLegend(node)
+                except Exception:
+                    pass
     _set_fonts_legend(lg)
     if compact_legend is not None:
-        try:
-            lg.setLegendFilterByMapEnabled(True)   # 只顯示圖上出現的項目
-        except Exception:
-            pass
         try:
             lg.setMaximumSymbolSize(7.0)           # 地圖單位箭頭在圖例中縮小
             lg.setMinimumSymbolSize(5.0)
@@ -291,7 +312,7 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
 def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAME,
                  subtitle="", align_to_grid=False, paper=(420.0, 297.0), extra_layers=None):
     """坡度分析版面。result_layers : dict(cells=, edges=, points=, frame=, plan=, contours=)"""
-    lyrs = [result_layers[k] for k in ("points", "edges", "cells", "frame", "plan", "contours")
+    lyrs = [result_layers[k] for k in ("points", "edges", "cells", "plan", "contours")
             if result_layers.get(k) is not None]
     lyrs += list(extra_layers or [])
     rows = [[d["name"], d["range"], str(d["count"]), "{:,.2f}".format(d["area"]), "{:.2f}".format(d["pct"])]
@@ -309,10 +330,16 @@ def build_layout(project, result_layers, frame, stats, summary, title=LAYOUT_NAM
     ).format(pi=pi_txt, dh=summary.get("dh", 0), L=summary.get("cell", 0),
              nc=summary.get("n_cells", 0), ms=summary.get("mean_slope", 0.0),
              mg=GRADES[summary.get("mean_grade", 1)][0], d=datetime.date.today().isoformat())
-    return _build(project, title, subtitle, paper, frame, result_layers["cells"].crs(), lyrs, lyrs,
+    layout = _build(project, title, subtitle, paper, frame, result_layers["cells"].crs(), lyrs, lyrs,
                   "坡度分級面積統計" + ("（計畫範圍內）" if summary.get("use_plan") else "（方格範圍）"),
                   (("級別", 11), ("坡度範圍", 25), ("坵塊數", 11), ("面積(m²)", 19), ("比例(%)", 13)),
-                  rows, notes, align_to_grid)
+                  rows, notes, align_to_grid, extent_layer=result_layers["cells"])
+    # 坵塊邊界交點數字依版面比例尺放大，使出圖可清楚判讀
+    mp = layout.itemById("main_map")
+    if mp is not None and result_layers.get("edges") is not None:
+        from .styles import fit_edge_labels_to_scale
+        fit_edge_labels_to_scale(result_layers["edges"], summary.get("cell", 25.0), mp.scale())
+    return layout
 
 
 def build_aspect_layout(project, result_layers, frame, aspect_stats, summary, title=ASPECT_LAYOUT_NAME,
@@ -338,7 +365,9 @@ def build_aspect_layout(project, result_layers, frame, aspect_stats, summary, ti
                   "坡向面積統計" + ("（計畫範圍內）" if summary.get("use_plan") else "（方格範圍）"),
                   (("坡向", 12), ("方位角", 27), ("坵塊數", 11), ("面積(m²)", 18), ("比例(%)", 13)),
                   rows, notes, align_to_grid, signature=True,
-                  compact_legend=[result_layers.get("aspect_points")])
+                  compact_legend=[result_layers.get("aspect_points")],
+                  legend_node_order=None if any(d["name"] == "平坦" and d["count"] > 0 for d in aspect_stats) else [0],
+                  extent_layer=result_layers.get("aspect_cells"))
 
 
 def export_layout(layout, path):

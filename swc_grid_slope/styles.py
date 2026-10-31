@@ -165,20 +165,46 @@ def style_cells(layer, cell, label_style=LABEL_STYLE_TEXT, colorize=True, show_n
     layer.triggerRepaint()
 
 
-def style_edges(layer, cell, label_style=LABEL_STYLE_TEXT):
-    sym = QgsLineSymbol.createSimple({"line_color": "#000000", "line_width": "0.35", "line_width_unit": "MM"})
+EDGE_LABEL_RATIO = 0.16   # 坵塊邊界交點數字高 ≈ 0.16 L（地圖單位）
+
+
+def style_edges(layer, cell, label_style=LABEL_STYLE_TEXT, size=None):
+    """坵塊邊界：細線＋各邊交點數（置於邊中點，隨方格旋轉）"""
+    sym = QgsLineSymbol.createSimple({"line_color": "#000000", "line_width": "0.25", "line_width_unit": "MM"})
     layer.setRenderer(QgsSingleSymbolRenderer(sym))
-    size = cell * (0.085 if label_style == LABEL_STYLE_TEXT else 0.1)
-    pal = _point_pal("\"n\"", 0, 0, _fmt(size), xf='"mx"', yf='"my"', scale="1")
+    size = size or cell * EDGE_LABEL_RATIO
+    pal = _point_pal("\"n\"", 0, 0, _fmt(size, bold=True), xf='"mx"', yf='"my"', scale="1")
     layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
     layer.setLabelsEnabled(True)
     layer.triggerRepaint()
 
 
-def style_points(layer):
+def fit_edge_labels_to_scale(layer, cell, scale, target_mm=2.6):
+    """依版面地圖比例尺調整邊界交點數字大小：出圖時字高約 target_mm，
+    但限制在 0.12 L～0.30 L 之間，避免過小或超出方格。"""
+    want = target_mm / 1000.0 * scale
+    size = min(max(want, cell * 0.12), cell * 0.30)
+    lab = layer.labeling()
+    if lab is None:
+        return size
+    pal = lab.settings()
+    fmt = pal.format()
+    fmt.setSize(size)
+    buf = fmt.buffer()
+    buf.setSize(size * 0.12)
+    fmt.setBuffer(buf)
+    pal.setFormat(fmt)
+    layer.setLabeling(QgsVectorLayerSimpleLabeling(pal))
+    layer.triggerRepaint()
+    return size
+
+
+def style_points(layer, cell=None):
+    """交點小圓圈；大小隨坵塊邊長（地圖單位），避免密集時遮蓋圖面"""
+    size, unit = ("1.2", "MM") if not cell else (str(cell * 0.06), "MapUnit")
     sym = QgsMarkerSymbol.createSimple({"name": "circle", "color": "255,255,255,0",
-                                        "outline_color": "#333333", "outline_width": "0.2",
-                                        "size": "1.2", "size_unit": "MM"})
+                                        "outline_color": "#333333", "outline_width": "0.15",
+                                        "size": size, "size_unit": unit})
     layer.setRenderer(QgsSingleSymbolRenderer(sym))
     layer.triggerRepaint()
 

@@ -89,7 +89,7 @@ class GridSlopeAlgorithm(QgsProcessingAlgorithm):
             self.PLAN, "計畫範圍（選填，用於面積統計）", [_ST_TypeVectorPolygon], optional=True))
         self.addParameter(QgsProcessingParameterBoolean(self.ASPECT, "計算坡向", True))
         self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_CELLS, "坵塊坡度分析", _ST_TypeVectorPolygon))
-        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_EDGES, "坵塊邊交點數", _ST_TypeVectorLine))
+        self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_EDGES, "坵塊邊界", _ST_TypeVectorLine))
         self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_POINTS, "等高線交點", _ST_TypeVectorPoint))
 
     def processAlgorithm(self, parameters, context, feedback):

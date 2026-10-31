@@ -96,12 +96,23 @@ lay = d._make_layout(); assert lay is not None and len(lay) == 2
 assert QgsProject.instance().layoutManager().layoutByName("坵塊法坡向分析圖") is not None
 lay = d._make_layout()   # rebuilding overwrites, never duplicates
 assert len(QgsProject.instance().layoutManager().layouts()) == 2
-with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "gui_layout.pdf"), "")):
-    d._export_layout()
-assert os.path.exists(os.path.join(OUT, "gui_layout.pdf")) and os.path.exists(os.path.join(OUT, "gui_layout_坡向圖.pdf"))
-with mock.patch.object(QFileDialog, "getSaveFileName", return_value=(os.path.join(OUT, "gui_layout.png"), "")):
-    d._export_layout()
-assert os.path.exists(os.path.join(OUT, "gui_layout_坡向圖.png"))
+# groups / visibility / names (v1.2.0)
+root = QgsProject.instance().layerTreeRoot()
+top = root.findGroup("坵塊法坡度坡向分析"); assert top is not None
+sg, ag = top.findGroup("坡度圖"), top.findGroup("坡向圖"); assert sg is not None and ag is not None
+names = [n.name() for n in sg.findLayers()]
+print("坡度圖 group:", names, "| 坡向圖 group:", [n.name() for n in ag.findLayers()])
+assert set(names) == {"等高線交點", "坵塊邊界", "坵塊方格範圍", "坵塊坡度分析"}
+assert not root.findLayer(d.result.points.id()).itemVisibilityChecked(), "intersection points hidden by default"
+exdir = os.path.join(OUT, "export"); os.makedirs(exdir, exist_ok=True)
+with mock.patch.object(QFileDialog, "getExistingDirectory", return_value=exdir), \
+     mock.patch.object(QMessageBox, "question", return_value=QMessageBox.StandardButton.Yes):
+    d.cb_fmt.setCurrentIndex(0); d._export_layout()
+    d.cb_fmt.setCurrentIndex(1); d._export_layout()
+print("exports:", sorted(os.listdir(exdir)))
+for e in (".pdf", ".png"):
+    for k in ("_坡度圖", "_坡向圖"):
+        assert os.path.exists(os.path.join(exdir, d._project_name() + k + e))
 import shutil; shutil.rmtree(os.path.join(OUT, "guiproj"), ignore_errors=True)
 d.le_pname.setText("A")
 for rnd in range(2):  # second round: files exist → overwrite prompt; gpkg in use → A_2

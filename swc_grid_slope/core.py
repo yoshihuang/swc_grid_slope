@@ -421,19 +421,27 @@ def _plane_aspect(samples):
 
 
 def aspect_from_contours(grid, r, c, contours, densify):
-    """以坵塊（外擴半格）範圍內等高線節點擬合平面求坡向"""
-    poly = grid.cell_polygon(r, c).buffer(grid.cell * 0.5, 1)
-    samples = []
-    for cid in contours.index.intersects(poly.boundingBox()):
-        z = contours.elev[cid]
-        if z is None:
-            continue
-        part = contours.geoms[cid].intersection(poly)
-        if part.isEmpty():
-            continue
-        part = part.densifyByDistance(densify)
-        for v in part.vertices():
-            samples.append((v.x(), v.y(), z))
+    """以坵塊範圍內等高線節點擬合平面求坡向。
+    先取外擴半格；若範圍內等高線不足兩個高程（無法定出方向），
+    逐步擴大至 1、2 格，仍只有單一高程才視為平坦。"""
+    cell_poly = grid.cell_polygon(r, c)
+    for k in (0.5, 1.0, 2.0):
+        poly = cell_poly.buffer(grid.cell * k, 1)
+        samples = []
+        levels = set()
+        for cid in contours.index.intersects(poly.boundingBox()):
+            z = contours.elev[cid]
+            if z is None:
+                continue
+            part = contours.geoms[cid].intersection(poly)
+            if part.isEmpty():
+                continue
+            part = part.densifyByDistance(densify)
+            for v in part.vertices():
+                samples.append((v.x(), v.y(), z))
+            levels.add(round(z, 6))
+        if len(levels) >= 2:
+            break
     return _plane_aspect(samples)
 
 
@@ -537,7 +545,7 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
     counts, epts = count_intersections(grid, contours, feedback, edge_keys)
 
     # ---- edges & points ---------------------------------------------------
-    edges = new_memory_layer("LineString", crs, names.get("edges", "坵塊邊交點數"), EDGE_FIELDS)
+    edges = new_memory_layer("LineString", crs, names.get("edges", "坵塊邊界"), EDGE_FIELDS)
     pts = new_memory_layer("Point", crs, names.get("points", "等高線交點"), POINT_FIELDS)
     efeats, pfeats = [], []
     for key in edge_keys:

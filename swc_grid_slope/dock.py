@@ -48,7 +48,9 @@ from .layout import ASPECT_LAYOUT_NAME, LAYOUT_NAME, build_aspect_layout, build_
 from .maptools import DrawFrameTool, EditFrameTool, FrameController
 from .save import output_paths, save_project_to_folder
 
-GROUP_NAME = "坵塊法坡度分析"
+GROUP_NAME = "坵塊法坡度坡向分析"
+OLD_GROUP_NAMES = ("坵塊法坡度分析",)   # 舊版群組名稱，沿用並改名
+SLOPE_GROUP = "坡度圖"
 ASPECT_GROUP = "坡向圖"
 
 
@@ -191,7 +193,7 @@ class SlopeDock(QDockWidget):
         self.ck_color = QCheckBox("依坡度分級著色")
         self.ck_color.setChecked(True)
         self.ck_points = QCheckBox("顯示交點")
-        self.ck_points.setChecked(True)
+        self.ck_points.setChecked(False)   # 等高線交點圖層預設不顯示
         h = QHBoxLayout()
         for c in (self.ck_color, self.ck_points):
             h.addWidget(c)
@@ -235,7 +237,11 @@ class SlopeDock(QDockWidget):
         h = QHBoxLayout()
         self.bt_layout = QPushButton("建立版面（坡度圖＋坡向圖）")
         self.bt_layout.clicked.connect(self._make_layout)
+        self.cb_fmt = QComboBox()
+        self.cb_fmt.addItems(["PDF", "PNG"])
+        f5.addRow("匯出格式", self.cb_fmt)
         self.bt_export = QPushButton("匯出 PDF/PNG")
+        self.bt_export.setToolTip("輸出「QGIS專案名稱_坡度圖」及「QGIS專案名稱_坡向圖」")
         self.bt_export.clicked.connect(self._export_layout)
         h.addWidget(self.bt_layout)
         h.addWidget(self.bt_export)
@@ -499,25 +505,35 @@ class SlopeDock(QDockWidget):
         root = prj.layerTreeRoot()
         grp = root.findGroup(GROUP_NAME)
         if grp is None:
+            for old in OLD_GROUP_NAMES:
+                grp = root.findGroup(old)
+                if grp is not None:
+                    grp.setName(GROUP_NAME)
+                    break
+        if grp is None:
             grp = root.insertGroup(0, GROUP_NAME)
         cell = res.summary["cell"]
         st = self.cb_style.currentIndex()
         styles.style_cells(res.cells, cell, st, self.ck_color.isChecked())
         styles.style_edges(res.edges, cell, st)
-        styles.style_points(res.points)
+        styles.style_points(res.points, cell)
         styles.style_frame(res.frame_layer)
-        order = [("points", res.points), ("edges", res.edges), ("frame", res.frame_layer), ("cells", res.cells)]
-        if generated is not None:
-            styles.style_contours(generated)
-            order.append(("contours", generated))
-        for key, lyr in order:
+        # 坡度圖子群組：等高線交點、坵塊邊界、坵塊方格範圍、坵塊坡度分析
+        slope_grp = grp.findGroup(SLOPE_GROUP) or grp.insertGroup(0, SLOPE_GROUP)
+        for key, lyr in (("points", res.points), ("edges", res.edges), ("frame", res.frame_layer), ("cells", res.cells)):
             prj.addMapLayer(lyr, False)
-            grp.addLayer(lyr)
+            slope_grp.addLayer(lyr)
             self.result_ids[key] = lyr.id()
+        slope_grp.setItemVisibilityChecked(True)
+        if generated is not None:   # DEM 產生的等高線放在主群組
+            styles.style_contours(generated)
+            prj.addMapLayer(generated, False)
+            grp.addLayer(generated)
+            self.result_ids["contours"] = generated.id()
         # 坡向圖（點圖層＋坵塊格線），預設關閉顯示以免與坡度標註重疊
         styles.style_aspect_points(res.aspect_points, cell)
         styles.style_aspect_cells(res.aspect_cells)
-        sub = grp.findGroup(ASPECT_GROUP) or grp.insertGroup(0, ASPECT_GROUP)
+        sub = grp.findGroup(ASPECT_GROUP) or grp.insertGroup(1, ASPECT_GROUP)
         for key, lyr in (("aspect_points", res.aspect_points), ("aspect_cells", res.aspect_cells)):
             prj.addMapLayer(lyr, False)
             sub.addLayer(lyr)
@@ -570,6 +586,11 @@ class SlopeDock(QDockWidget):
     def _result_layers(self):
         prj = QgsProject.instance()
         d = {k: prj.mapLayer(v) for k, v in self.result_ids.items()}
+        # 等高線交點：依圖層面板勾選決定是否出現在版面（預設不顯示）
+        pts = d.get("points")
+        node = prj.layerTreeRoot().findLayer(pts.id()) if pts is not None else None
+        if node is not None and not node.isVisible():
+            d.pop("points")
         plan = self.cb_plan.currentLayer()
         if plan is not None:
             d["plan"] = plan
@@ -603,14 +624,20 @@ class SlopeDock(QDockWidget):
             if made is None:
                 return
             lay, lay2 = made
-        path, flt = QFileDialog.getSaveFileName(self, "匯出版面（坡度圖；坡向圖自動加上「_坡向圖」）", "",
-                                                "PDF (*.pdf);;PNG (*.png)")
-        if not path:
+        prj = QgsProject.instance()
+        name = self._project_name()
+        start = os.path.dirname(prj.fileName()) if prj.fileName() else ""
+        folder = QFileDialog.getExistingDirectory(
+            self, "選擇匯出資料夾（檔名：{0}_坡度圖、{0}_坡向圖）".format(name), start)
+        if not folder:
             return
-        root, ext = os.path.splitext(path)
-        if ext.lower() not in (".pdf", ".png"):
-            ext = ".png" if "png" in (flt or "").lower() else ".pdf"
-        p1, p2 = root + ext, root + "_坡向圖" + ext
+        ext = ".png" if self.cb_fmt.currentIndex() == 1 else ".pdf"
+        p1 = os.path.join(folder, name + "_坡度圖" + ext)
+        p2 = os.path.join(folder, name + "_坡向圖" + ext)
+        exist = [p for p in (p1, p2) if os.path.exists(p)]
+        if exist and QMessageBox.question(self, "檔案已存在", "下列檔案已存在，是否覆蓋？\n\n" + "\n".join(exist)) \
+                != QMessageBox.StandardButton.Yes:
+            return
         ok1 = export_layout(lay, p1)
         ok2 = export_layout(lay2, p2)
         if ok1 and ok2:
@@ -618,6 +645,13 @@ class SlopeDock(QDockWidget):
         else:
             self._msg("匯出失敗：{}".format("、".join(p for p, ok in ((p1, ok1), (p2, ok2)) if not ok)),
                       Qgis.MessageLevel.Critical)
+
+    def _project_name(self):
+        """QGIS 專案名稱（專案檔名，未存檔時用專案標題，皆無時用預設名稱）"""
+        prj = QgsProject.instance()
+        name = prj.baseName() if prj.fileName() else ""
+        name = name or (prj.title() or "").strip() or "坵塊法坡度坡向分析"
+        return "".join("_" if ch in '\\/:*?"<>|' else ch for ch in name)
 
     # ---------------------------------------------------------------- save
     def _choose_folder(self):

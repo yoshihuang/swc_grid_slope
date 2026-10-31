@@ -160,17 +160,30 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
         opts.driverName = "GPKG"
         opts.layerName = tbl
         opts.fileEncoding = "UTF-8"
-        # a source field called "fid" would clash with the GeoPackage primary key
-        names_lower = [f.name().lower() for f in lyr.fields()]
-        if "fid" in names_lower:
+        # The source's own primary key (e.g. "fid" of a GeoPackage layer, which QGIS
+        # exposes as a field) is reused as the new primary key, not copied as an
+        # attribute – otherwise every re-save would add gpkg_fid, gpkg_fid2, ...
+        try:
+            pk_idx = set(lyr.primaryKeyAttributes()) if lyr.providerType() == "ogr" else set()
+        except Exception:
+            pk_idx = set()
+        pk_names = [lyr.fields().at(i).name() for i in pk_idx]
+        others_lower = [f.name().lower() for i, f in enumerate(lyr.fields()) if i not in pk_idx]
+        if len(pk_names) == 1 and pk_names[0].lower() not in others_lower:
+            opts.layerOptions = ["FID={}".format(pk_names[0])]
+        elif "fid" in others_lower:
+            # an ordinary attribute called "fid" would clash with the GeoPackage key
             pk, i = "gpkg_fid", 1
-            while pk in names_lower:
+            while pk in others_lower:
                 i += 1
                 pk = "gpkg_fid{}".format(i)
             opts.layerOptions = ["FID={}".format(pk)]
         # GeoPackage field names are case-insensitive: drop later duplicates
         seen, keep = set(), []
         for idx, f in enumerate(lyr.fields()):
+            if idx in pk_idx and len(pk_names) == 1:
+                continue  # becomes the primary key
+
             k = f.name().lower()
             if k in seen:
                 msgs.append("提示：圖層「{}」欄位「{}」與其他欄位僅大小寫不同，未寫入".format(name, f.name()))
@@ -178,7 +191,10 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
             seen.add(k)
             keep.append(idx)
         if len(keep) != lyr.fields().count():
-            opts.attributes = keep
+            if keep:
+                opts.attributes = keep
+            else:  # only the primary key existed (an empty list would mean "all")
+                opts.skipAttributeCreation = True
         opts.actionOnExistingFile = (
             E(QgsVectorFileWriter, "ActionOnExistingFile.CreateOrOverwriteLayer", "CreateOrOverwriteLayer")
             if os.path.exists(tmp) else
