@@ -5,7 +5,7 @@
 import os
 import re
 
-from .compat import E
+from .compat import E, log_ignored
 
 from qgis.core import (
     QgsProject,
@@ -64,7 +64,7 @@ def output_paths(folder, name):
     """回傳 (qgz, gpkg)；檔名已存在且正被目前專案使用時自動加序號"""
     base = re.sub(r'[\\/:*?"<>|]+', "_", name).strip() or "坵塊法坡度分析"
     in_use = {os.path.normcase(os.path.abspath(p)) for p in
-              (_source_path(l) for l in QgsProject.instance().mapLayers().values()) if p}
+              (_source_path(lyr_) for lyr_ in QgsProject.instance().mapLayers().values()) if p}
     cand, i = base, 1
     while True:
         qgz = os.path.join(folder, cand + ".qgz")
@@ -80,8 +80,8 @@ def _cleanup(gpkg):
         try:
             if os.path.exists(p):
                 os.remove(p)
-        except OSError:
-            pass
+        except OSError as ex:
+            log_ignored("save.py:83", ex)
 
 
 def save_project_to_folder(project, folder, name, include_all=True, layers=None, feedback=None):
@@ -110,8 +110,8 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
     used = {"layer_styles", "gpkg_contents", "gpkg_spatial_ref_sys", "gpkg_geometry_columns",
             "gpkg_extensions", "gpkg_metadata", "gpkg_tile_matrix", "gpkg_tile_matrix_set", "sqlite_sequence"}
     targets = list(project.mapLayers().values()) if include_all else list(layers or [])
-    vectors = [l for l in targets if isinstance(l, QgsVectorLayer) and _is_local_vector(l)]
-    rasters = [l for l in targets if isinstance(l, QgsRasterLayer) and _is_local_raster(l)]
+    vectors = [lyr_ for lyr_ in targets if isinstance(lyr_, QgsVectorLayer) and _is_local_vector(lyr_)]
+    rasters = [lyr_ for lyr_ in targets if isinstance(lyr_, QgsRasterLayer) and _is_local_raster(lyr_)]
     total = max(1, len(vectors) + len(rasters))
     done = 0
     plan = []  # (layer, new_source, provider, table, kind)
@@ -215,9 +215,9 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
             feedback(int(80.0 * done / total))
 
     # layers that must not be lost (memory layers) or that were explicitly requested
-    must = set(id(l) for l in (layers or []))
-    lost = [l for l in vectors + rasters if l not in [p[0] for p in plan]
-            and (l.providerType() == "memory" or id(l) in must)]
+    must = set(id(lyr_) for lyr_ in (layers or []))
+    lost = [lyr_ for lyr_ in vectors + rasters if lyr_ not in [p[0] for p in plan]
+            and (lyr_.providerType() == "memory" or id(lyr_) in must)]
     if lost:
         _cleanup(gpkg)
         raise RuntimeError("下列圖層無法寫入 gpkg，未儲存任何檔案：\n" + "\n".join(skipped))
@@ -242,8 +242,8 @@ def save_project_to_folder(project, folder, name, include_all=True, layers=None,
         if provider == "ogr":
             try:  # also store the style inside the gpkg as default
                 lyr.saveStyleToDatabase(tbl, "", True, "")
-            except Exception:
-                pass
+            except Exception as ex:
+                log_ignored("save.py:245", ex)
         lyr.triggerRepaint()
         msgs.append("{}：{} → {}".format(kind, name, tbl))
 

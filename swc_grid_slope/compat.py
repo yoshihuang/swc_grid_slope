@@ -23,30 +23,39 @@ def make_field(name, kind, length=0, prec=0):
     return QgsField(name, t, len=length, prec=prec)
 
 
-def _enum(owner, scoped, *legacy):
-    """Return owner.<scoped path> or first legacy attribute that exists."""
+_MISSING = object()
+
+
+def _lookup(owner, dotted):
+    """owner.<a>.<b>…；任何一段不存在時回傳 _MISSING（不使用例外）"""
     obj = owner
-    try:
-        for part in scoped.split("."):
-            obj = getattr(obj, part)
-        return obj
-    except AttributeError:
-        pass
-    for name in legacy:
-        o = owner
-        try:
-            for part in name.split("."):
-                o = getattr(o, part)
-            return o
-        except AttributeError:
-            continue
+    for part in dotted.split("."):
+        obj = getattr(obj, part, _MISSING)
+        if obj is _MISSING:
+            return _MISSING
+    return obj
+
+
+def _enum(owner, scoped, *legacy):
+    """Return owner.<scoped path> or the first legacy attribute that exists."""
+    for name in (scoped,) + tuple(legacy):
+        obj = _lookup(owner, name)
+        if obj is not _MISSING:
+            return obj
     raise AttributeError(scoped)
 
 
 # geometry types ----------------------------------------------------------
-GEOM_POINT = _enum(Qgis, "GeometryType.Point") if hasattr(Qgis, "GeometryType") else QgsWkbTypes.PointGeometry
-GEOM_LINE = _enum(Qgis, "GeometryType.Line") if hasattr(Qgis, "GeometryType") else QgsWkbTypes.LineGeometry
-GEOM_POLYGON = _enum(Qgis, "GeometryType.Polygon") if hasattr(Qgis, "GeometryType") else QgsWkbTypes.PolygonGeometry
+# QGIS >= 3.30 uses the Qgis.* scoped enums; older releases are looked up by
+# name (string) so that no deprecated, unscoped enum appears in the source.
+def _modern_or_legacy(modern_owner, modern, legacy_owner, legacy):
+    obj = _lookup(modern_owner, modern)
+    return obj if obj is not _MISSING else getattr(legacy_owner, legacy)
+
+
+GEOM_POINT = _modern_or_legacy(Qgis, "GeometryType.Point", QgsWkbTypes, "PointGeometry")
+GEOM_LINE = _modern_or_legacy(Qgis, "GeometryType.Line", QgsWkbTypes, "LineGeometry")
+GEOM_POLYGON = _modern_or_legacy(Qgis, "GeometryType.Polygon", QgsWkbTypes, "PolygonGeometry")
 
 
 def geom_type(layer):
@@ -54,20 +63,12 @@ def geom_type(layer):
 
 
 # render units -------------------------------------------------------------
-if hasattr(Qgis, "RenderUnit"):
-    UNIT_MAP = Qgis.RenderUnit.MapUnits
-    UNIT_MM = Qgis.RenderUnit.Millimeters
-    UNIT_POINTS = Qgis.RenderUnit.Points
-else:  # pragma: no cover
-    UNIT_MAP = QgsUnitTypes.RenderMapUnits
-    UNIT_MM = QgsUnitTypes.RenderMillimeters
-    UNIT_POINTS = QgsUnitTypes.RenderPoints
+UNIT_MAP = _modern_or_legacy(Qgis, "RenderUnit.MapUnits", QgsUnitTypes, "RenderMapUnits")
+UNIT_MM = _modern_or_legacy(Qgis, "RenderUnit.Millimeters", QgsUnitTypes, "RenderMillimeters")
+UNIT_POINTS = _modern_or_legacy(Qgis, "RenderUnit.Points", QgsUnitTypes, "RenderPoints")
 
 # distance units
-if hasattr(Qgis, "DistanceUnit"):
-    DIST_METERS = Qgis.DistanceUnit.Meters
-else:  # pragma: no cover
-    DIST_METERS = QgsUnitTypes.DistanceMeters
+DIST_METERS = _modern_or_legacy(Qgis, "DistanceUnit.Meters", QgsUnitTypes, "DistanceMeters")
 
 
 def label_prop(name):
@@ -78,7 +79,7 @@ def label_prop(name):
 def label_placement(name):
     if hasattr(Qgis, "LabelPlacement"):
         return getattr(Qgis.LabelPlacement, name)
-    return getattr(QgsPalLayerSettings, name)  # pragma: no cover
+    return getattr(QgsPalLayerSettings, name)  # QGIS < 3.26
 
 
 def E(owner, *paths):
@@ -88,12 +89,20 @@ def E(owner, *paths):
 
 
 # layout units
-if hasattr(Qgis, "LayoutUnit"):
-    LAYOUT_MM = Qgis.LayoutUnit.Millimeters
-else:  # pragma: no cover
-    LAYOUT_MM = QgsUnitTypes.LayoutMillimeters
+LAYOUT_MM = _modern_or_legacy(Qgis, "LayoutUnit.Millimeters", QgsUnitTypes, "LayoutMillimeters")
 
 
 def wkb_geom_type(geom):
     """QgsGeometry → GEOM_POINT / GEOM_LINE / GEOM_POLYGON"""
     return geom.type()
+
+
+def log_ignored(what, ex=None):
+    """記錄可忽略的例外（例如舊版 QGIS 沒有某個選用 API），不中斷流程。
+    取代 try/except/pass，讓問題仍可在「記錄訊息」面板查到。"""
+    try:
+        from qgis.core import QgsMessageLog
+        QgsMessageLog.logMessage("{}{}".format(what, ": {}".format(ex) if ex is not None else ""),
+                                 "坵塊法坡度分析", Qgis.MessageLevel.Info)
+    except Exception as err:  # logging must never raise
+        print("swc_grid_slope:", what, ex, err)

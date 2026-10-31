@@ -24,22 +24,14 @@ from qgis.core import (
 )
 
 from . import core
-from .compat import E
+from .compat import E, _modern_or_legacy
 
-if hasattr(Qgis, "ProcessingSourceType"):
-    _ST_TypeVectorPolygon = Qgis.ProcessingSourceType.VectorPolygon
-    _ST_TypeVectorLine = Qgis.ProcessingSourceType.VectorLine
-    _ST_TypeVectorPoint = Qgis.ProcessingSourceType.VectorPoint
-else:  # QGIS < 3.36
-    _ST_TypeVectorPolygon = QgsProcessing.TypeVectorPolygon
-    _ST_TypeVectorLine = QgsProcessing.TypeVectorLine
-    _ST_TypeVectorPoint = QgsProcessing.TypeVectorPoint
-if hasattr(Qgis, "ProcessingNumberParameterType"):
-    _NUM_INT = Qgis.ProcessingNumberParameterType.Integer
-    _NUM_DBL = Qgis.ProcessingNumberParameterType.Double
-else:  # QGIS < 3.36
-    _NUM_INT = QgsProcessingParameterNumber.Integer
-    _NUM_DBL = QgsProcessingParameterNumber.Double
+# QGIS >= 3.36: Qgis.Processing* scoped enums; older releases looked up by name
+_ST_TypeVectorPolygon = _modern_or_legacy(Qgis, "ProcessingSourceType.VectorPolygon", QgsProcessing, "TypeVectorPolygon")
+_ST_TypeVectorLine = _modern_or_legacy(Qgis, "ProcessingSourceType.VectorLine", QgsProcessing, "TypeVectorLine")
+_ST_TypeVectorPoint = _modern_or_legacy(Qgis, "ProcessingSourceType.VectorPoint", QgsProcessing, "TypeVectorPoint")
+_NUM_INT = _modern_or_legacy(Qgis, "ProcessingNumberParameterType.Integer", QgsProcessingParameterNumber, "Integer")
+_NUM_DBL = _modern_or_legacy(Qgis, "ProcessingNumberParameterType.Double", QgsProcessingParameterNumber, "Double")
 
 ICON = os.path.join(os.path.dirname(__file__), "icons", "icon.svg")
 

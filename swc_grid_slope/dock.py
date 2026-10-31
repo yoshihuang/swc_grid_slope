@@ -43,7 +43,7 @@ from qgis.core import (
 from qgis.gui import QgsFieldComboBox, QgsMapLayerComboBox
 
 from . import core, styles
-from .compat import DIST_METERS
+from .compat import DIST_METERS, log_ignored
 from .layout import ASPECT_LAYOUT_NAME, LAYOUT_NAME, build_aspect_layout, build_layout, export_layout
 from .maptools import DrawFrameTool, EditFrameTool, FrameController
 from .save import output_paths, save_project_to_folder
@@ -730,8 +730,8 @@ class SlopeDock(QDockWidget):
     def unload(self):
         try:
             self.canvas.mapToolSet.disconnect(self._tool_changed)
-        except Exception:
-            pass
+        except Exception as ex:
+            log_ignored("dock.py:733", ex)
         if self.canvas.mapTool() in (self.draw_tool, self.edit_tool):
             self.canvas.unsetMapTool(self.canvas.mapTool())
         self.ctrl.hide_preview()

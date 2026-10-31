@@ -23,6 +23,11 @@ jobs:
           cp README.md swc_grid_slope/README.md
           zip -r swc_grid_slope.zip swc_grid_slope -x "*/__pycache__/*"
           python tests/check_plugin_package.py swc_grid_slope.zip
+      - name: Security scan like plugins.qgis.org (bandit / detect-secrets / flake8)
+        run: |
+          pip install -q bandit detect-secrets flake8
+          git clone -q --depth 1 https://github.com/qgis/QGIS-Plugins-Website /tmp/site
+          bash tests/site_scan.sh swc_grid_slope.zip /tmp/site
       - uses: actions/upload-artifact@v4
         with:
           name: swc_grid_slope

@@ -23,7 +23,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
 )
 
-from .compat import E, UNIT_MAP, UNIT_MM, label_placement, label_prop
+from .compat import E, UNIT_MAP, UNIT_MM, label_placement, label_prop, log_ignored
 from .core import GRADE_COLORS, GRADES
 
 FONT_FAMILY = "Noto Sans CJK TC"
@@ -77,8 +77,8 @@ def _allow_overlap(pal):
         pal.displayAll = True
     try:
         pal.obstacleSettings().setIsObstacle(False)
-    except Exception:
-        pass
+    except Exception as ex:
+        log_ignored("styles.py:80", ex)
 
 
 def _point_pal(expression, lx, ly, fmt, xf='"cx"', yf='"cy"', rotf='"rot"', scale='"L"'):

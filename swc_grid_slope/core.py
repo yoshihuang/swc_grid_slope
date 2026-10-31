@@ -23,7 +23,7 @@ from qgis.core import (
     QgsVectorLayer,
 )
 
-from .compat import GEOM_POINT, GEOM_POLYGON, make_field
+from .compat import GEOM_POINT, GEOM_POLYGON, make_field, log_ignored
 
 # --------------------------------------------------------------------------
 # 坡度分級（第 23 條）
@@ -325,8 +325,8 @@ class ContourSet(object):
             try:
                 g.get().dropZValue()
                 g.get().dropMValue()
-            except Exception:
-                pass
+            except Exception as ex:
+                log_ignored("core.py:328", ex)
             if g.type() == GEOM_POLYGON:
                 g = QgsGeometry(g.constGet().boundary())
             geoms.append(g)
@@ -798,6 +798,6 @@ def contours_from_dem(dem_layer, band, interval, dest_crs, extent=None, feedback
     del lyr
     try:
         os.remove(out_path)
-    except OSError:
-        pass
+    except OSError as ex:
+        log_ignored("core.py:801", ex)
     return mem

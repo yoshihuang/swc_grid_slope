@@ -29,19 +29,17 @@ from qgis.core import (
     QgsTextFormat,
 )
 
-from .compat import DIST_METERS, LAYOUT_MM, E
+from .compat import DIST_METERS, LAYOUT_MM, E, _modern_or_legacy, log_ignored
 from .core import GRADES, PI_314
 from .styles import _font_family
 
 LAYOUT_NAME = "坵塊法坡度分析圖"
 ASPECT_LAYOUT_NAME = "坵塊法坡向分析圖"
 
-if hasattr(Qgis, "LegendComponent"):
-    LEGEND_STYLES = (Qgis.LegendComponent.Title, Qgis.LegendComponent.Group,
-                     Qgis.LegendComponent.Subgroup, Qgis.LegendComponent.SymbolLabel)
-else:  # pragma: no cover
-    LEGEND_STYLES = (QgsLegendStyle.Title, QgsLegendStyle.Group,
-                     QgsLegendStyle.Subgroup, QgsLegendStyle.SymbolLabel)
+# QGIS >= 3.32: Qgis.LegendComponent; older releases looked up by name
+LEGEND_STYLES = tuple(_modern_or_legacy(Qgis, "LegendComponent." + n, QgsLegendStyle, n)
+                      for n in ("Title", "Group", "Subgroup", "SymbolLabel"))
+LEGEND_HIDDEN = _modern_or_legacy(Qgis, "LegendComponent.Hidden", QgsLegendStyle, "Hidden")
 
 
 def _mm(v):
@@ -128,8 +126,8 @@ def _table(layout, x, y, w, h, columns, rows):
         cf.setFont(QFont(_font_family()))
         cf.setSize(7.5)
         table.setContentTextFormat(cf)
-    except AttributeError:  # QGIS < 3.16
-        pass
+    except AttributeError as ex:
+        log_ignored("layout.py:129", ex)
     table.setGridStrokeWidth(0.2)
     table.setCellMargin(1.0)
     fr = QgsLayoutFrame(layout, table)
@@ -211,8 +209,8 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
     na.setLinkedMap(mp)
     try:
         na.setNorthMode(E(QgsLayoutItemPicture, "NorthMode.GridNorth", "GridNorth"))
-    except Exception:
-        pass
+    except Exception as ex:
+        log_ignored("layout.py:212", ex)
     y += 25
 
     sb = QgsLayoutItemScaleBar(layout)
@@ -232,8 +230,8 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
         tf.setFont(QFont(_font_family()))
         tf.setSize(8)
         sb.setTextFormat(tf)
-    except AttributeError:
-        pass
+    except AttributeError as ex:
+        log_ignored("layout.py:233", ex)
     layout.addLayoutItem(sb)
     sb.attemptMove(QgsLayoutPoint(sx + 5, y, LAYOUT_MM))
     sb.update()
@@ -249,13 +247,12 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
         node = root.addLayer(lyr)
         if compact_legend is not None and lyr in compact_legend and node is not None:
             # 只列符號項目，不另列圖層名稱（如範例「坡向」）
-            hidden = (Qgis.LegendComponent.Hidden if hasattr(Qgis, "LegendComponent")
-                      else QgsLegendStyle.Hidden)
+            hidden = LEGEND_HIDDEN
             try:
                 from qgis.core import QgsLegendRenderer
                 QgsLegendRenderer.setNodeLegendStyle(node, hidden)
-            except Exception:
-                pass
+            except Exception as ex:
+                log_ignored("layout.py:254", ex)
             if legend_node_order is not None:
                 # 只列出圖上實際出現的項目（不使用「依地圖篩選圖例」，
                 # 該功能在 QGIS 3.x 匯出時會等待背景繪圖而卡住）
@@ -263,15 +260,15 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
                     from qgis.core import QgsMapLayerLegendUtils
                     QgsMapLayerLegendUtils.setLegendNodeOrder(node, legend_node_order)
                     lg.model().refreshLayerLegend(node)
-                except Exception:
-                    pass
+                except Exception as ex:
+                    log_ignored("layout.py:263", ex)
     _set_fonts_legend(lg)
     if compact_legend is not None:
         try:
             lg.setMaximumSymbolSize(7.0)           # 地圖單位箭頭在圖例中縮小
             lg.setMinimumSymbolSize(5.0)
-        except Exception:
-            pass
+        except Exception as ex:
+            log_ignored("layout.py:270", ex)
     lg.setSymbolHeight(4)
     lg.setSymbolWidth(7)
     layout.addLayoutItem(lg)
@@ -303,8 +300,8 @@ def _build(project, title, subtitle, paper, frame, crs, map_layers, legend_layer
         try:
             from qgis.PyQt.QtCore import Qt
             t.setHAlign(Qt.AlignmentFlag.AlignHCenter)
-        except Exception:
-            pass
+        except Exception as ex:
+            log_ignored("layout.py:303", ex)
     _box(layout, sx - 2, map_y, side_w + 2, map_h)
     return layout
 
@@ -381,6 +378,6 @@ def export_layout(layout, path):
     st.generateWorldFile = False
     try:
         st.exportMetadata = False
-    except AttributeError:
-        pass
+    except AttributeError as ex:
+        log_ignored("layout.py:381", ex)
     return exp.exportToImage(path, st) == E(QgsLayoutExporter, "ExportResult.Success", "Success")
