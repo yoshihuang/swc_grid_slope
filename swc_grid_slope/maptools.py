@@ -58,6 +58,13 @@ class FrameController(QObject):
         if self.frame is not None:
             self.set_frame(self.frame.copy(), snap=False, final=True)
 
+    def update_plan(self, geom):
+        """只更新計畫範圍與預覽，不自動擴充範圍（執行前檢查用）"""
+        self.plan_geom = geom if geom is not None and not geom.isEmpty() else None
+        if self.frame is not None:
+            self._update_preview()
+            self.changed.emit()
+
     def set_frame(self, frame, snap=None, emit=True, final=False):
         """final=True：使用者完成一次修改（繪製、放開滑鼠、輸入數值），
         此時檢查範圍是否包含計畫範圍，未包含則自動擴充。"""

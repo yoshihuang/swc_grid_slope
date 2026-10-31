@@ -144,6 +144,18 @@ def scenario(tag, mode, cell_idx, style):
     assert d.ctrl.frame.contains(pg)
     print("4 shrink → re-expanded:", d.lb_grid.text())
     ov = d.ctrl.overlay_count
+    # a frame that misses part of the plan must not run
+    good = d.ctrl.frame.copy()
+    bad = good.copy()
+    bad.w, bad.h = good.w * 0.5, good.h * 0.5
+    d.ctrl.set_frame(bad, snap=False)
+    prev = d.result
+    with mock.patch.object(QMessageBox, "warning") as mw:
+        d.run()
+        assert mw.called and "未完全包含計畫範圍" in mw.call_args[0][2]
+    assert d.result is prev
+    print("5 frame missing part of plan → run blocked")
+    d.ctrl.set_frame(good, snap=False)
 
     # 3. run
     t1 = time.time()
@@ -212,6 +224,16 @@ def scenario(tag, mode, cell_idx, style):
     print("scenario %.1fs" % (time.time() - t0))
     return res
 
+
+# mandatory plan: nothing selected → draw / run blocked with a warning
+d.cb_plan.setLayer(None)
+with mock.patch.object(QMessageBox, "warning") as mw:
+    d._tool_draw()
+    assert mw.called and "計畫範圍" in mw.call_args[0][2]
+    mw.reset_mock()
+    d.run()
+    assert mw.called and d.result is None
+print("no plan selected → blocked:", mw.call_args[0][2].splitlines()[0])
 
 scenario("C10_contour_L10", "contour", 0, 0)
 scenario("C25_contour_L25_big", "contour", 1, 1)

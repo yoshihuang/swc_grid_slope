@@ -142,7 +142,9 @@ class SlopeDock(QDockWidget):
         self.cb_plan.setFilters(_filters("PolygonLayer"))
         self.cb_plan.setAllowEmptyLayer(True)
         self.cb_plan.setLayer(None)
-        f2.addRow("計畫範圍（選填）", self.cb_plan)
+        self.cb_plan.setToolTip("必選：坵塊範圍須包含計畫範圍，且只產出與其交集之坵塊")
+        lb_plan = QLabel("計畫範圍 <span style='color:#c00'>*必選</span>")
+        f2.addRow(lb_plan, self.cb_plan)
         v.addWidget(g2)
 
         # 3. frame -------------------------------------------------------------
@@ -340,7 +342,25 @@ class SlopeDock(QDockWidget):
         return True
 
     # --------------------------------------------------------------- frame
+    def _require_plan(self):
+        """計畫範圍為必選；未選擇或沒有圖徵時提醒並回傳 None"""
+        lyr = self.cb_plan.currentLayer()
+        g = self._plan_geometry() if lyr is not None else None
+        if lyr is None:
+            QMessageBox.warning(self, "無法執行",
+                                "尚未選擇「計畫範圍」圖層，無法執行。\n\n"
+                                "請先於「2. 坵塊設定」的「計畫範圍」選單選擇計畫範圍（多邊形）圖層。")
+            return None
+        if g is None or g.isEmpty():
+            QMessageBox.warning(self, "無法執行",
+                                "「計畫範圍」圖層「{}」沒有圖徵，無法執行。".format(lyr.name()))
+            return None
+        return g
+
     def _tool_draw(self):
+        if self._require_plan() is None:
+            self.bt_draw.setChecked(False)
+            return
         if not self._check_crs():
             self.bt_draw.setChecked(False)
             return
@@ -349,6 +369,9 @@ class SlopeDock(QDockWidget):
         self.canvas.setMapTool(self.draw_tool)
 
     def _tool_edit(self):
+        if self._require_plan() is None:
+            self.bt_edit.setChecked(False)
+            return
         if self.ctrl.frame is None:
             self._msg("請先繪製方格範圍", Qgis.MessageLevel.Warning)
             self.bt_edit.setChecked(False)
@@ -364,15 +387,10 @@ class SlopeDock(QDockWidget):
         self.bt_edit.setChecked(new is self.edit_tool)
 
     def _frame_from_plan(self):
-        lyr = self.cb_plan.currentLayer()
-        if lyr is None:
-            self._msg("請先選擇計畫範圍圖層", Qgis.MessageLevel.Warning)
+        g = self._require_plan()
+        if g is None:
             return
         if not self._check_crs():
-            return
-        g = self._plan_geometry()
-        if g is None or g.isEmpty():
-            self._msg("計畫範圍沒有圖徵", Qgis.MessageLevel.Warning)
             return
         self.ctrl.cell = self.cell_size()
         f = core.Frame.from_geometry(g)
@@ -435,18 +453,29 @@ class SlopeDock(QDockWidget):
 
     # ------------------------------------------------------------------ run
     def run(self):
+        # 1. 計畫範圍為必選
+        plan = self._require_plan()
+        if plan is None:
+            return
         if self.ctrl.frame is None:
-            self._msg("請先建立方格範圍", Qgis.MessageLevel.Warning)
+            QMessageBox.warning(self, "無法執行", "尚未建立矩形方格範圍，無法執行。\n\n"
+                                "請以「繪製矩形」或「依計畫範圍」建立方格範圍。")
             return
         if not self._check_crs():
             return
         crs = self.canvas.mapSettings().destinationCrs()
         cell = self.cell_size()
         dh = self.sp_dh.value()
-        # 再次確認範圍包含計畫範圍（未包含則自動擴充）
+        # 2. 矩形方格範圍須完全包含計畫範圍（執行時不自動擴充，未包含即停止）
         self.ctrl.cell = cell
-        self.ctrl.set_plan(self._plan_geometry())
+        self.ctrl.update_plan(plan)
         frame = self.ctrl.frame.copy()
+        if not frame.contains(plan):
+            QMessageBox.warning(self, "無法執行",
+                                "矩形方格之範圍未完全包含計畫範圍圖層，無法執行。\n\n"
+                                "請以「平移/旋轉/縮放」調整範圍（放開滑鼠後會自動擴充），"
+                                "或按「依計畫範圍」重新建立方格範圍。")
+            return
         fb = QgsFeedback()
         fb.progressChanged.connect(lambda p: self.pb.setValue(int(p)))
         ext = frame.geometry().buffer(cell, 1).boundingBox()
@@ -475,7 +504,6 @@ class SlopeDock(QDockWidget):
             if not cs.geoms:
                 self._msg("方格範圍內沒有等高線", Qgis.MessageLevel.Warning)
                 return
-            plan = self._plan_geometry()
             res = core.run_analysis(frame, cell, dh, crs, cs, pi=self.pi_value(), plan_geom=plan,
                                     dem=dem, dem_band=self.sp_band.value(),
                                     compute_aspect=True, feedback=fb)

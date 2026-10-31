@@ -18,6 +18,21 @@ from swc_grid_slope import plugin
 d = SlopeDock(iface)
 d.rb_dem.setChecked(True); d.cb_dem.setLayer(dem)
 canvas.setExtent(QgsRectangle(250050, 2700050, 250350, 2700350)); canvas.refresh()
+# ---- v1.2.1: plan layer is mandatory ----------------------------------------
+with mock.patch.object(QMessageBox, "warning") as mw:
+    d._tool_draw()
+    assert mw.called and "計畫範圍" in mw.call_args[0][2] and canvas.mapTool() is not d.draw_tool
+    mw.reset_mock(); d.run()
+    assert mw.called and "計畫範圍" in mw.call_args[0][2] and d.result is None
+    mw.reset_mock(); d._frame_from_plan(); assert mw.called
+print("no plan → blocked with warning")
+# a small plan in the middle of the rectangle drawn below (so no expansion there)
+p0 = canvas.getCoordinateTransform().toMapCoordinates(380, 320)
+p1 = canvas.getCoordinateTransform().toMapCoordinates(420, 280)
+small = QgsVectorLayer("Polygon?crs=EPSG:3826", "小計畫範圍", "memory")
+sf = QgsFeature(); sf.setGeometry(QgsGeometry.fromRect(QgsRectangle(p0, p1)))
+small.dataProvider().addFeatures([sf]); QgsProject.instance().addMapLayer(small)
+d.cb_plan.setLayer(small)
 # draw a rectangle with the draw tool
 d.bt_draw.setChecked(True); d._tool_draw()
 assert canvas.mapTool() is d.draw_tool
@@ -82,6 +97,17 @@ assert len(warned) > n1 and d.ctrl.frame.contains(pg), "move must re-expand"
 d.sp_ang.setValue(25); d._ui_to_frame(); assert d.ctrl.frame.contains(pg)
 ov = d.ctrl.overlay_count
 r_, c_ = d.ctrl.rows_cols(); print("overlay", ov, "of", r_ * c_); assert ov < r_ * c_
+# frame that does not fully contain the plan (e.g. plan edited afterwards) → run blocked
+keep_frame = d.ctrl.frame.copy()
+from swc_grid_slope import core as _core
+d.ctrl.set_frame(_core.Frame(250200, 2700230, 60, 60, 0), snap=False)   # not a user edit: no expansion
+assert not d.ctrl.frame.contains(pg)
+with mock.patch.object(QMessageBox, "warning") as mw:
+    d.run()
+    assert mw.called and "未完全包含計畫範圍" in mw.call_args[0][2], mw.call_args
+assert d.result is None
+print("frame not containing plan → blocked with warning")
+d.ctrl.set_frame(keep_frame, snap=False)
 d.run()
 assert d.result is not None, "run failed"
 assert d.result.summary["n_cells"] == ov, (d.result.summary["n_cells"], ov)

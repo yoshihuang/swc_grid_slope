@@ -66,7 +66,8 @@ class GridSlopeAlgorithm(QgsProcessingAlgorithm):
 
     def shortHelpString(self):
         return ("依水土保持技術規範第 25 條坵塊法計算方格平均坡度：S = nπΔh/(8L)×100。\n"
-                "方格範圍取「範圍圖層」第一個圖徵之最小外接旋轉矩形，自左上角起每 L 公尺切一格。\n"
+                "方格範圍取「範圍圖層」圖徵之最小外接旋轉矩形，自左上角起每 L 公尺切一格；\n"
+                "計畫範圍為必選，方格範圍須完全包含計畫範圍，只產出與計畫範圍交集之坵塊。\n"
                 "地形可輸入等高線或 DEM（DEM 會先以 Δh 產生等高線）。\n"
                 "坡度分級依第 23 條（一～七級坡）；坡向依第 26 條。")
 
@@ -86,7 +87,7 @@ class GridSlopeAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(QgsProcessingParameterEnum(self.CELL, "坵塊邊長 L", ["10 公尺", "25 公尺"], defaultValue=1))
         self.addParameter(QgsProcessingParameterEnum(self.PI, "圓周率", ["3.14（規範）", "math.pi"], defaultValue=0))
         self.addParameter(QgsProcessingParameterFeatureSource(
-            self.PLAN, "計畫範圍（選填，用於面積統計）", [_ST_TypeVectorPolygon], optional=True))
+            self.PLAN, "計畫範圍（必選）", [_ST_TypeVectorPolygon]))
         self.addParameter(QgsProcessingParameterBoolean(self.ASPECT, "計算坡向", True))
         self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_CELLS, "坵塊坡度分析", _ST_TypeVectorPolygon))
         self.addParameter(QgsProcessingParameterFeatureSink(self.OUT_EDGES, "坵塊邊界", _ST_TypeVectorLine))
@@ -124,14 +125,17 @@ class GridSlopeAlgorithm(QgsProcessingAlgorithm):
         if not cs.geoms:
             raise QgsProcessingException("方格範圍內沒有等高線")
 
-        plan_geom = None
         plan_src = self.parameterAsSource(parameters, self.PLAN, context)
-        if plan_src is not None:
-            pg = [f.geometry() for f in plan_src.getFeatures()]
-            if pg:
-                plan_geom = QgsGeometry.unaryUnion(pg)
-                if plan_src.sourceCrs() != crs:
-                    plan_geom.transform(QgsCoordinateTransform(plan_src.sourceCrs(), crs, context.transformContext()))
+        if plan_src is None:
+            raise QgsProcessingException("未指定計畫範圍，無法執行。")
+        pg = [f.geometry() for f in plan_src.getFeatures()]
+        if not pg:
+            raise QgsProcessingException("計畫範圍圖層沒有圖徵，無法執行。")
+        plan_geom = QgsGeometry.unaryUnion(pg)
+        if plan_src.sourceCrs() != crs:
+            plan_geom.transform(QgsCoordinateTransform(plan_src.sourceCrs(), crs, context.transformContext()))
+        if not frame.contains(plan_geom):
+            raise QgsProcessingException("矩形方格之範圍未完全包含計畫範圍圖層，無法執行。")
 
         res = core.run_analysis(frame, cell, dh, crs, cs, pi=pi, plan_geom=plan_geom, dem=dem, dem_band=band,
                                 compute_aspect=self.parameterAsBoolean(parameters, self.ASPECT, context),
