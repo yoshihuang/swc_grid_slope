@@ -634,6 +634,7 @@ CELL_FIELDS = [
     ("aspect_deg", "double"), ("aspect", "string"),
     ("cx", "double"), ("cy", "double"), ("rot", "double"),
     ("area_m2", "double"), ("plan_ratio", "double"), ("plan_area", "double"),
+    ("bld_area", "double"),      # 坵塊內建築範圍面積（未指定建築範圍時為空值）
 ]
 
 EDGE_FIELDS = [("edge_id", "string"), ("dir", "string"), ("n", "int"),
@@ -672,13 +673,15 @@ class AnalysisResult(object):
         self.aspect_points = None
         self.aspect_cells = None
         self.stats = []        # list of dicts per grade
+        self.bld_stats = []    # 建築範圍內坵塊統計（未指定建築範圍時為空）
+        self.bld_summary = {}
         self.aspect_stats = []
         self.summary = {}
 
 
 def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
                  dem=None, dem_band=1, compute_aspect=True, feedback=None,
-                 names=None):
+                 names=None, bld_geom=None):
     """
     frame     : Frame
     cell      : 坵塊邊長 L (m)
@@ -687,6 +690,7 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
     contours  : ContourSet（已在 crs 中）
     plan_geom : 計畫範圍 QgsGeometry（crs 中，可為 None）
     dem       : QgsRasterLayer（坡向用，可為 None）
+    bld_geom  : 建築範圍 QgsGeometry（crs 中，可為 None）；指定時另統計建築範圍內之坵塊
     """
     names = names or {}
     grid = Grid(frame, cell)
@@ -736,6 +740,11 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
         plan_eng = QgsGeometry.createGeometryEngine(plan_geom.constGet())
         plan_eng.prepareGeometry()
 
+    bld_eng = None
+    if bld_geom is not None and not bld_geom.isEmpty():
+        bld_eng = QgsGeometry.createGeometryEngine(bld_geom.constGet())
+        bld_eng.prepareGeometry()
+
     dem_tr, dem_prov = None, None
     if dem is not None and compute_aspect:
         dem_prov = dem.dataProvider()
@@ -766,6 +775,9 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
                 else:
                     parea = poly.intersection(plan_geom).area()
                     ratio = parea / area if area > 0 else 0.0
+            barea = None
+            if bld_eng is not None:
+                barea = poly.intersection(bld_geom).area() if bld_eng.intersects(poly.constGet()) else 0.0
             az = None
             if compute_aspect:
                 if dem_prov is not None:
@@ -781,6 +793,7 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
                 aspect_name(az) if compute_aspect else None,
                 center.x(), center.y(), frame.angle,
                 round(area, 2), round(ratio, 4), round(parea, 2),
+                round(barea, 2) if barea is not None else None,
             ])
             cfeats.append(f)
             if feedback is not None and no % 50 == 0:
@@ -827,6 +840,8 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
     res.aspect_points, res.aspect_cells = ap, ac
     res.stats, res.summary = statistics(cfeats, plan_geom is not None)
     res.aspect_stats = aspect_statistics(cfeats, plan_geom is not None)
+    if bld_eng is not None:
+        res.bld_stats, res.bld_summary = building_statistics(cfeats)
     res.summary.update({"rows": grid.rows, "cols": grid.cols, "cell": cell, "dh": dh,
                         "pi": pi, "n_points": len(pfeats), "n_cells": len(cfeats)})
     if feedback is not None:
@@ -852,6 +867,35 @@ def aspect_statistics(cell_features, use_plan):
         d["pct"] = d["area"] / tot * 100.0 if tot > 0 else 0.0
         rows.append(d)
     return rows
+
+
+def building_statistics(cell_features):
+    """建築範圍內坵塊統計：與建築範圍有交集（bld_area > 0）之坵塊，
+    依坡度分級統計坵塊數與建築面積；平均坡度以建築面積加權。"""
+    acc = OrderedDict((g, {"grade": g, "name": GRADES[g][0], "range": GRADES[g][1],
+                           "count": 0, "area": 0.0}) for g in GRADES)
+    tot, wsum, n_cells, max_grade, max_s = 0.0, 0.0, 0, 0, 0.0
+    for f in cell_features:
+        a = f["bld_area"]
+        if a is None or a != a or a <= 1e-6:
+            continue
+        g = f["grade"]
+        acc[g]["count"] += 1
+        acc[g]["area"] += a
+        tot += a
+        wsum += a * f["S_pct"]
+        n_cells += 1
+        max_grade = max(max_grade, g)
+        max_s = max(max_s, f["S_pct"])
+    rows = []
+    for d in acc.values():
+        d["pct"] = (d["area"] / tot * 100.0) if tot > 0 else 0.0
+        rows.append(d)
+    summary = {"n_cells": n_cells, "total_area": tot,
+               "mean_slope": (wsum / tot) if tot > 0 else 0.0,
+               "max_grade": max_grade, "max_slope": max_s}
+    summary["mean_grade"] = slope_grade(summary["mean_slope"])
+    return rows, summary
 
 
 def statistics(cell_features, use_plan):

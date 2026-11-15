@@ -46,7 +46,8 @@ from qgis.gui import QgsFieldComboBox, QgsMapLayerComboBox
 
 from . import core, styles
 from .compat import DIST_METERS, log_ignored
-from .layout import ASPECT_LAYOUT_NAME, LAYOUT_NAME, build_aspect_layout, build_layout, export_layout
+from .layout import (ASPECT_LAYOUT_NAME, DEFAULT_SCALE, LANDSCAPE, LAYOUT_NAME, MIN_SCALE_DENOMINATOR, PAPERS,
+                     PORTRAIT, build_aspect_layout, build_layout, export_layout, pick_paper, required_map_size)
 from .maptools import DrawFrameTool, EditFrameTool, FrameController
 from .save import output_paths, save_project_to_folder
 
@@ -204,7 +205,7 @@ class SlopeDock(QDockWidget):
         # 3-1. auto search -----------------------------------------------------
         g3s = QGroupBox("3-1. 坵塊自動搜尋（依建物）")
         f3s = QFormLayout(g3s)
-        tip = QLabel("選擇建物圖層（建物須位於計畫／基地範圍內），自動嘗試各種旋轉角度與方格位置，"
+        tip = QLabel("選擇建築範圍圖層（建物須位於計畫／基地範圍內），自動嘗試各種旋轉角度與方格位置，"
                      "找出涵蓋建物之坵塊中目標坵塊數最少的方格範圍。基地範圍即「2. 坵塊設定」之計畫範圍。")
         tip.setWordWrap(True)
         tip.setStyleSheet("color:#555;font-size:11px")
@@ -214,7 +215,7 @@ class SlopeDock(QDockWidget):
         self.cb_bld.setAllowEmptyLayer(True)
         self.cb_bld.setLayer(None)
         self.cb_bld.setToolTip("建物（多邊形）圖層；有選取圖徵時只用選取的圖徵")
-        f3s.addRow("建物圖層", self.cb_bld)
+        f3s.addRow("建築範圍圖層", self.cb_bld)
         self.cb_goal = QComboBox()
         self.cb_goal.addItems(["N 級坡（含）以下之坵塊數最少", "超過 N 級坡之坵塊數最少"])
         self.cb_goal.setToolTip("統計對象為涵蓋（與建物有交集）之坵塊；同數時取涵蓋建物坵塊總數較少、坡度總和較小者")
@@ -284,6 +285,17 @@ class SlopeDock(QDockWidget):
         self.lb_summary = QLabel("")
         self.lb_summary.setWordWrap(True)
         f4.addRow(self.lb_summary)
+        self.lb_bld = QLabel("")
+        self.lb_bld.setWordWrap(True)
+        f4.addRow(self.lb_bld)
+        self.tbl_bld = QTableWidget(0, 4)
+        self.tbl_bld.setHorizontalHeaderLabels(["級別", "坵塊數", "建築面積 (m²)", "比例 (%)"])
+        self.tbl_bld.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.tbl_bld.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tbl_bld.setMinimumHeight(200)
+        f4.addRow(self.tbl_bld)
+        self.lb_bld.setVisible(False)
+        self.tbl_bld.setVisible(False)
         self.bt_csv = QPushButton("匯出統計 CSV")
         self.bt_csv.clicked.connect(self._export_csv)
         f4.addRow(self.bt_csv)
@@ -299,9 +311,25 @@ class SlopeDock(QDockWidget):
         self.le_sub = QLineEdit("")
         self.le_sub.setPlaceholderText("例：○○段○○地號 水土保持計畫")
         f5.addRow("副標", self.le_sub)
+        self.sp_scale = QSpinBox()
+        self.sp_scale.setRange(50, MIN_SCALE_DENOMINATOR)
+        self.sp_scale.setSingleStep(100)
+        self.sp_scale.setValue(DEFAULT_SCALE)
+        self.sp_scale.setPrefix("1 / ")
+        self.sp_scale.setToolTip("出圖比例尺不得小於 1/{}（分母不得大於 {}）".format(
+            MIN_SCALE_DENOMINATOR, MIN_SCALE_DENOMINATOR))
+        f5.addRow("出圖比例尺", self.sp_scale)
         self.cb_paper = QComboBox()
-        self.cb_paper.addItems(["A3 橫式", "A4 橫式", "A1 橫式"])
-        f5.addRow("紙張", self.cb_paper)
+        self.cb_paper.addItems(["自動（依出圖比例尺）"] + [n for n, _wh in PAPERS])
+        self.cb_paper.setToolTip("自動：取能以出圖比例尺容納全部坵塊的最小圖紙")
+        f5.addRow("圖紙尺寸", self.cb_paper)
+        self.cb_orient = QComboBox()
+        self.cb_orient.addItems(["自動", LANDSCAPE, PORTRAIT])
+        f5.addRow("圖紙方向", self.cb_orient)
+        self.lb_paper = QLabel("建立版面時依出圖比例尺決定")
+        self.lb_paper.setWordWrap(True)
+        self.lb_paper.setStyleSheet("color:#555;font-size:11px")
+        f5.addRow("採用圖紙", self.lb_paper)
         self.ck_align = QCheckBox("地圖旋轉使方格正置")
         f5.addRow(self.ck_align)
         h = QHBoxLayout()
@@ -568,11 +596,11 @@ class SlopeDock(QDockWidget):
         if plan is None:
             return
         if self.cb_bld.currentLayer() is None:
-            QMessageBox.warning(self, "無法執行", "尚未選擇「建物圖層」，無法執行坵塊自動搜尋。")
+            QMessageBox.warning(self, "無法執行", "尚未選擇「建築範圍圖層」，無法執行坵塊自動搜尋。")
             return
         bld = self._building_geometry()
         if bld is None or bld.isEmpty():
-            QMessageBox.warning(self, "無法執行", "「建物圖層」「{}」沒有圖徵，無法執行。".format(
+            QMessageBox.warning(self, "無法執行", "「建築範圍圖層」「{}」沒有圖徵，無法執行。".format(
                 self.cb_bld.currentLayer().name()))
             return
         if not self._check_crs():
@@ -581,8 +609,8 @@ class SlopeDock(QDockWidget):
         if not outside.isEmpty() and outside.area() > 0.01:
             bld = bld.intersection(plan)
             if bld.isEmpty() or bld.area() <= 0:
-                QMessageBox.warning(self, "無法執行", "建物圖層不在計畫（基地）範圍內，無法執行。\n\n"
-                                    "請確認建物圖層與「2. 坵塊設定」之計畫範圍圖層。")
+                QMessageBox.warning(self, "無法執行", "建築範圍圖層不在計畫（基地）範圍內，無法執行。\n\n"
+                                    "請確認建築範圍圖層與「2. 坵塊設定」之計畫範圍圖層。")
                 return
             self._msg("部分建物（{:,.2f} m²）位於計畫（基地）範圍外，僅以範圍內之建物搜尋。".format(outside.area()),
                       Qgis.MessageLevel.Warning, 8)
@@ -701,9 +729,10 @@ class SlopeDock(QDockWidget):
             if not cs.geoms:
                 self._msg("方格範圍內沒有等高線", Qgis.MessageLevel.Warning)
                 return
+            bld = self._building_geometry()     # 有選擇建築範圍時另統計建築範圍內之坵塊
             res = core.run_analysis(frame, cell, dh, crs, cs, pi=self.pi_value(), plan_geom=plan,
                                     dem=dem, dem_band=self.sp_band.value(),
-                                    compute_aspect=True, feedback=fb)
+                                    compute_aspect=True, feedback=fb, bld_geom=bld)
         except Exception as ex:  # noqa
             import traceback
             QMessageBox.critical(self, "計算失敗", "{}\n\n{}".format(ex, traceback.format_exc()))
@@ -786,6 +815,32 @@ class SlopeDock(QDockWidget):
             "統計範圍：{}　總面積 {:,.2f} m²<br>面積加權平均坡度 {:.2f}%（{}）".format(
                 "計畫範圍內" if s["use_plan"] else "方格範圍", s["total_area"], s["mean_slope"],
                 core.GRADES[s["mean_grade"]][0]))
+        # 建築範圍內坵塊統計
+        has_bld = bool(res.bld_stats)
+        self.lb_bld.setVisible(has_bld)
+        self.tbl_bld.setVisible(has_bld)
+        self.tbl_bld.setRowCount(0)
+        if not has_bld:
+            return
+        for d in res.bld_stats:
+            r = self.tbl_bld.rowCount()
+            self.tbl_bld.insertRow(r)
+            vals = ["{}（{}）".format(d["name"], d["range"]), str(d["count"]),
+                    "{:,.2f}".format(d["area"]), "{:.2f}".format(d["pct"])]
+            for c, v in enumerate(vals):
+                it = QTableWidgetItem(v)
+                if c == 0:
+                    it.setBackground(QColor(core.GRADE_COLORS[d["grade"]]).lighter(130))
+                self.tbl_bld.setItem(r, c, it)
+        b = res.bld_summary
+        if b["n_cells"]:
+            self.lb_bld.setText(
+                "<b>建築範圍內坵塊統計</b>（與建築範圍有交集之坵塊）<br>"
+                "坵塊 {} 格　建築面積 {:,.2f} m²<br>建築面積加權平均坡度 {:.2f}%（{}）；最陡 {:.2f}%（{}）".format(
+                    b["n_cells"], b["total_area"], b["mean_slope"], core.GRADES[b["mean_grade"]][0],
+                    b["max_slope"], core.GRADES[b["max_grade"]][0]))
+        else:
+            self.lb_bld.setText("<b>建築範圍內坵塊統計</b><br>建築範圍與產出之坵塊沒有交集。")
 
     def _export_csv(self):
         if self.result is None:
@@ -805,6 +860,14 @@ class SlopeDock(QDockWidget):
             w.writerow(["坡向", "方位角", "坵塊數", "面積(m2)", "比例(%)"])
             for d in self.result.aspect_stats:
                 w.writerow([d["name"], d["range"], d["count"], round(d["area"], 2), round(d["pct"], 2)])
+            if self.result.bld_stats:
+                w.writerow([])
+                w.writerow(["建築範圍內坵塊", "坡度範圍", "坵塊數", "建築面積(m2)", "比例(%)"])
+                for d in self.result.bld_stats:
+                    w.writerow([d["name"], d["range"], d["count"], round(d["area"], 2), round(d["pct"], 2)])
+                b = self.result.bld_summary
+                w.writerow(["合計", "", b["n_cells"], round(b["total_area"], 2), 100])
+                w.writerow(["建築面積加權平均坡度(%)", round(b["mean_slope"], 2)])
         self._msg("已匯出 {}".format(path), Qgis.MessageLevel.Success)
 
     # --------------------------------------------------------------- layout
@@ -819,6 +882,8 @@ class SlopeDock(QDockWidget):
         plan = self.cb_plan.currentLayer()
         if plan is not None:
             d["plan"] = plan
+        if self.cb_bld.currentLayer() is not None:      # 有選擇建築範圍時一併出圖
+            d["building"] = self.cb_bld.currentLayer()
         if self.rb_contour.isChecked() and self.cb_contour.currentLayer() is not None:
             d["contours"] = self.cb_contour.currentLayer()
         return d
@@ -827,15 +892,29 @@ class SlopeDock(QDockWidget):
         if self.result is None or not self.result_ids:
             self._msg("請先完成坡度計算", Qgis.MessageLevel.Warning)
             return None
-        paper = {0: (420.0, 297.0), 1: (297.0, 210.0), 2: (841.0, 594.0)}[self.cb_paper.currentIndex()]
         prj = QgsProject.instance()
         rl = self._result_layers()
+        # 依出圖比例尺選擇圖紙尺寸與方向
+        scale = self.sp_scale.value()
+        align = self.ck_align.isChecked()
+        need_w, need_h = required_map_size(self.result_frame, rl.get("cells"), align, scale)
+        size = None if self.cb_paper.currentIndex() == 0 else self.cb_paper.currentText()
+        orient = None if self.cb_orient.currentIndex() == 0 else self.cb_orient.currentText()
+        pname, pori, paper, fits = pick_paper(need_w, need_h, size, orient)
+        self.lb_paper.setText("{} {}（{:g} × {:g} mm），比例尺 1/{:,}；圖面需 {:.0f} × {:.0f} mm{}".format(
+            pname, pori, paper[0], paper[1], scale, need_w, need_h, "" if fits else "，超出圖紙"))
+        if not fits:
+            self._msg("以 1/{:,} 出圖需 {:.0f} × {:.0f} mm 的圖面，{} {} 容納不下，圖面將被裁切。{}".format(
+                scale, need_w, need_h, pname, pori,
+                "請將「圖紙尺寸」與「圖紙方向」改為自動或較大圖紙。" if (size or orient)
+                else "已是最大圖紙 A0，請縮小計畫範圍或分幅出圖。"), Qgis.MessageLevel.Warning, 12)
         lay = build_layout(prj, rl, self.result_frame,
                            self.result.stats, self.result.summary, title=self.le_title.text() or LAYOUT_NAME,
-                           subtitle=self.le_sub.text(), align_to_grid=self.ck_align.isChecked(), paper=paper)
+                           subtitle=self.le_sub.text(), align_to_grid=align, paper=paper, scale=scale,
+                           bld_summary=self.result.bld_summary, bld_stats=self.result.bld_stats)
         lay2 = build_aspect_layout(prj, rl, self.result_frame, self.result.aspect_stats, self.result.summary,
                                    title=self.le_title2.text() or ASPECT_LAYOUT_NAME, subtitle=self.le_sub.text(),
-                                   align_to_grid=self.ck_align.isChecked(), paper=paper)
+                                   align_to_grid=align, paper=paper, scale=scale)
         self.iface.openLayoutDesigner(lay)
         self.iface.openLayoutDesigner(lay2)
         return lay, lay2
@@ -900,7 +979,8 @@ class SlopeDock(QDockWidget):
                 return
         prj = QgsProject.instance()
         layers = [prj.mapLayer(i) for i in self.result_ids.values() if prj.mapLayer(i) is not None]
-        for extra in (self.cb_plan.currentLayer(), self.cb_contour.currentLayer() if self.rb_contour.isChecked() else None,
+        for extra in (self.cb_plan.currentLayer(), self.cb_bld.currentLayer(),
+                      self.cb_contour.currentLayer() if self.rb_contour.isChecked() else None,
                       self.cb_dem.currentLayer() if self.rb_dem.isChecked() else None):
             if extra is not None:
                 layers.append(extra)
