@@ -5,6 +5,7 @@ import csv
 import math
 import os
 
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
@@ -22,6 +23,7 @@ from qgis.PyQt.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QProgressBar,
+    QProgressDialog,
     QPushButton,
     QRadioButton,
     QScrollArea,
@@ -59,6 +61,19 @@ def _filters(name):
         return getattr(Qgis.LayerFilter, name)
     except AttributeError:
         return getattr(QgsMapLayerProxyModel, name)
+
+
+class _DialogFeedback(object):
+    """把 core 的進度／取消介面接到 QProgressDialog"""
+
+    def __init__(self, dlg):
+        self.dlg = dlg
+
+    def setProgress(self, p):
+        self.dlg.setValue(min(99, int(p)))   # 100 會自動關閉對話框，結束時由呼叫端關閉
+
+    def isCanceled(self):
+        return self.dlg.wasCanceled()
 
 
 class SlopeDock(QDockWidget):
@@ -185,6 +200,59 @@ class SlopeDock(QDockWidget):
         self.lb_grid = QLabel("尚未建立範圍")
         f3.addRow("方格數", self.lb_grid)
         v.addWidget(g3)
+
+        # 3-1. auto search -----------------------------------------------------
+        g3s = QGroupBox("3-1. 坵塊自動搜尋（依建物）")
+        f3s = QFormLayout(g3s)
+        tip = QLabel("選擇建物圖層（建物須位於計畫／基地範圍內），自動嘗試各種旋轉角度與方格位置，"
+                     "找出涵蓋建物之坵塊中目標坵塊數最少的方格範圍。基地範圍即「2. 坵塊設定」之計畫範圍。")
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color:#555;font-size:11px")
+        f3s.addRow(tip)
+        self.cb_bld = QgsMapLayerComboBox()
+        self.cb_bld.setFilters(_filters("PolygonLayer"))
+        self.cb_bld.setAllowEmptyLayer(True)
+        self.cb_bld.setLayer(None)
+        self.cb_bld.setToolTip("建物（多邊形）圖層；有選取圖徵時只用選取的圖徵")
+        f3s.addRow("建物圖層", self.cb_bld)
+        self.cb_goal = QComboBox()
+        self.cb_goal.addItems(["N 級坡（含）以下之坵塊數最少", "超過 N 級坡之坵塊數最少"])
+        self.cb_goal.setToolTip("統計對象為涵蓋（與建物有交集）之坵塊；同數時取涵蓋建物坵塊總數較少、坡度總和較小者")
+        f3s.addRow("搜尋目標", self.cb_goal)
+        self.sp_glimit = QSpinBox()
+        self.sp_glimit.setRange(1, 6)
+        self.sp_glimit.setValue(3)
+        self.sp_glimit.setPrefix("N = ")
+        self.sp_glimit.setSuffix(" 級坡")
+        f3s.addRow("分級門檻", self.sp_glimit)
+        self.sp_astep = QDoubleSpinBox()
+        self.sp_astep.setRange(0.5, 45.0)
+        self.sp_astep.setDecimals(1)
+        self.sp_astep.setValue(5.0)
+        self.sp_astep.setSuffix(" °")
+        self.sp_astep.setToolTip("方格具 90° 對稱，於 -45°～45° 內每隔此角度試一次")
+        f3s.addRow("旋轉角間距", self.sp_astep)
+        self.sp_ostep = QDoubleSpinBox()
+        self.sp_ostep.setRange(0.5, 25.0)
+        self.sp_ostep.setDecimals(1)
+        self.sp_ostep.setValue(5.0)
+        self.sp_ostep.setSuffix(" m")
+        self.sp_ostep.setToolTip("方格線沿兩軸在一個坵塊邊長 L 內每隔此距離平移試一次")
+        f3s.addRow("位置間距", self.sp_ostep)
+        self.lb_combo = QLabel("")
+        self.lb_combo.setStyleSheet("color:#555;font-size:11px")
+        f3s.addRow("搜尋組合數", self.lb_combo)
+        for sp in (self.sp_astep, self.sp_ostep):
+            sp.valueChanged.connect(self._search_combo_changed)
+        self.bt_search = QPushButton("自動搜尋最佳方格範圍")
+        self.bt_search.setStyleSheet("font-weight:bold;padding:5px")
+        self.bt_search.clicked.connect(self.auto_search)
+        f3s.addRow(self.bt_search)
+        self.lb_search = QLabel("")
+        self.lb_search.setWordWrap(True)
+        f3s.addRow(self.lb_search)
+        v.addWidget(g3s)
+        self._search_combo_changed()
 
         # 4. compute -----------------------------------------------------------
         g4 = QGroupBox("4. 計算與展示")
@@ -324,6 +392,7 @@ class SlopeDock(QDockWidget):
 
     def _cell_changed(self):
         self.ctrl.cell = self.cell_size()
+        self._search_combo_changed()
         if self.ctrl.frame is not None:
             self.ctrl.set_frame(self.ctrl.frame.copy(), final=True)
 
@@ -450,6 +519,134 @@ class SlopeDock(QDockWidget):
         f = core.Frame(self.sp_cx.value(), self.sp_cy.value(), self.sp_w.value(),
                        self.sp_h.value(), self.sp_ang.value())
         self.ctrl.set_frame(f, snap=self.ctrl.snap, final=True)
+
+    # ---------------------------------------------------------- auto search
+    def _search_combo_changed(self, *args):
+        angles, offsets = core.search_candidates(self.cell_size(), self.sp_astep.value(), self.sp_ostep.value())
+        self.lb_combo.setText("{} 個角度 × {} × {} 個位置 = {:,} 組".format(
+            len(angles), len(offsets), len(offsets), len(angles) * len(offsets) ** 2))
+
+    def _building_geometry(self):
+        lyr = self.cb_bld.currentLayer()
+        if lyr is None:
+            return None
+        crs = self.canvas.mapSettings().destinationCrs()
+        feats = lyr.getSelectedFeatures() if lyr.selectedFeatureCount() else lyr.getFeatures()
+        geoms = [QgsGeometry(f.geometry()) for f in feats]
+        geoms = [g for g in geoms if not g.isNull() and not g.isEmpty()]
+        if not geoms:
+            return None
+        g = QgsGeometry.unaryUnion(geoms)
+        if lyr.crs() != crs:
+            g.transform(QgsCoordinateTransform(lyr.crs(), crs, QgsProject.instance()))
+        return g
+
+    def _search_contours(self, ext, crs, dh):
+        """搜尋用等高線（僅建物周邊）；無法取得時提醒並回傳 None"""
+        if self.rb_contour.isChecked():
+            lyr = self.cb_contour.currentLayer()
+            if lyr is None:
+                self._msg("請選擇等高線圖層", Qgis.MessageLevel.Warning)
+                return None
+            cs = core.ContourSet.from_layer(lyr, crs, None, ext)
+        else:
+            dem = self.cb_dem.currentLayer()
+            if dem is None:
+                self._msg("請選擇 DEM 圖層", Qgis.MessageLevel.Warning)
+                return None
+            gen = core.contours_from_dem(dem, self.sp_band.value(), dh, crs, ext)
+            cs = core.ContourSet.from_layer(gen, crs, "ELEV", ext)
+        cs = cs.clipped(QgsGeometry.fromRect(ext))
+        if not cs.geoms:
+            self._msg("建物周邊沒有等高線，無法搜尋", Qgis.MessageLevel.Warning)
+            return None
+        return cs
+
+    def auto_search(self):
+        """坵塊自動搜尋：找出涵蓋建物之坵塊中目標坵塊數最少的方格範圍"""
+        plan = self._require_plan()
+        if plan is None:
+            return
+        if self.cb_bld.currentLayer() is None:
+            QMessageBox.warning(self, "無法執行", "尚未選擇「建物圖層」，無法執行坵塊自動搜尋。")
+            return
+        bld = self._building_geometry()
+        if bld is None or bld.isEmpty():
+            QMessageBox.warning(self, "無法執行", "「建物圖層」「{}」沒有圖徵，無法執行。".format(
+                self.cb_bld.currentLayer().name()))
+            return
+        if not self._check_crs():
+            return
+        outside = bld.difference(plan)
+        if not outside.isEmpty() and outside.area() > 0.01:
+            bld = bld.intersection(plan)
+            if bld.isEmpty() or bld.area() <= 0:
+                QMessageBox.warning(self, "無法執行", "建物圖層不在計畫（基地）範圍內，無法執行。\n\n"
+                                    "請確認建物圖層與「2. 坵塊設定」之計畫範圍圖層。")
+                return
+            self._msg("部分建物（{:,.2f} m²）位於計畫（基地）範圍外，僅以範圍內之建物搜尋。".format(outside.area()),
+                      Qgis.MessageLevel.Warning, 8)
+        crs = self.canvas.mapSettings().destinationCrs()
+        cell = self.cell_size()
+        dh = self.sp_dh.value()
+        n_limit = self.sp_glimit.value()
+        goal = core.GOAL_GT if self.cb_goal.currentIndex() == 1 else core.GOAL_LE
+        goal_text = ("超過 {} 級坡" if goal == core.GOAL_GT else "{} 級坡（含）以下").format(n_limit)
+        angles, offsets = core.search_candidates(cell, self.sp_astep.value(), self.sp_ostep.value())
+        combos = len(angles) * len(offsets) ** 2
+        if combos > 20000 and QMessageBox.question(
+                self, "坵塊自動搜尋", "共 {:,} 組旋轉角與位置，可能需要數分鐘，是否繼續？\n\n"
+                "（可加大「旋轉角間距」或「位置間距」以減少組合數）".format(combos)) != QMessageBox.StandardButton.Yes:
+            return
+
+        dlg = QProgressDialog("坵塊自動搜尋中…（{:,} 組旋轉角與位置）".format(combos), "取消", 0, 100, self)
+        dlg.setWindowTitle("坵塊自動搜尋")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        best = None
+        try:
+            # 涵蓋建物之坵塊距建物不超過 L·√2，取建物外擴 3L 之等高線即足夠
+            ext = bld.boundingBox().buffered(cell * 3.0)
+            cs = self._search_contours(ext, crs, dh)
+            if cs is None:
+                return
+            best = core.search_best_frame(plan, bld, cell, dh, cs, pi=self.pi_value(),
+                                          angle_step=self.sp_astep.value(), offset_step=self.sp_ostep.value(),
+                                          grade_limit=n_limit, goal=goal, feedback=_DialogFeedback(dlg))
+        except Exception as ex:  # noqa
+            import traceback
+            QMessageBox.critical(self, "搜尋失敗", "{}\n\n{}".format(ex, traceback.format_exc()))
+            return
+        finally:
+            dlg.close()
+            dlg.deleteLater()
+        if best is None:
+            self._msg("已取消坵塊自動搜尋", Qgis.MessageLevel.Warning)
+            return
+
+        # 套用最佳方格範圍
+        self.ctrl.cell = cell
+        self.ctrl.plan_geom = plan
+        frame = best["frame"]
+        self.ctrl.set_frame(frame.copy(), snap=False, final=True)
+        self.canvas.setExtent(frame.geometry().buffer(cell, 1).boundingBox())
+        self.canvas.refresh()
+        grades = "、".join("{} {} 格".format(core.GRADES[g][0], n) for g, n in best["grades"].items() if n)
+        text = ("最佳方格範圍：旋轉角 {:g}°、方格線偏移 ({:g}, {:g}) m<br>"
+                "涵蓋建物之坵塊 {} 格，其中 {} <b>{} 格</b>（各組合 {}～{} 格）<br>"
+                "分級：{}<br>共試 {:,} 組，其中 {:,} 組同為最少。").format(
+            best["angle"], best["ox"], best["oy"], best["total"], goal_text, best["target"],
+            best["target"], best["worst"], grades or "—", best["tried"], best["ties"])
+        self.lb_search.setText(text)
+        self._msg("坵塊自動搜尋完成：涵蓋建物之坵塊 {} 格，{} {} 格（旋轉角 {:g}°）".format(
+            best["total"], goal_text, best["target"], best["angle"]), Qgis.MessageLevel.Success, 10)
+        plain = text.replace("<br>", "\n").replace("<b>", "").replace("</b>", "")
+        if QMessageBox.question(self, "坵塊自動搜尋完成", plain + "\n\n已套用為方格範圍。是否立即產出坵塊並計算坡度及坡向？") \
+                == QMessageBox.StandardButton.Yes:
+            self.run()
 
     # ------------------------------------------------------------------ run
     def run(self):

@@ -23,7 +23,7 @@ from qgis.core import (
     QgsVectorLayer,
 )
 
-from .compat import GEOM_POINT, GEOM_POLYGON, make_field, log_ignored
+from .compat import GEOM_LINE, GEOM_POINT, GEOM_POLYGON, make_field, log_ignored
 
 # --------------------------------------------------------------------------
 # 坡度分級（第 23 條）
@@ -249,14 +249,31 @@ class Grid(object):
         eng = QgsGeometry.createGeometryEngine(plan_geom.constGet())
         eng.prepareGeometry()
         out = []
-        for r in range(self.rows):
-            for c in range(self.cols):
+        r0, r1, c0, c1 = self.rc_range(plan_geom)
+        for r in range(r0, r1 + 1):
+            for c in range(c0, c1 + 1):
                 poly = self.cell_polygon(r, c)
                 if not eng.intersects(poly.constGet()):
                     continue
                 if eng.contains(poly.constGet()) or poly.intersection(plan_geom).area() > 1e-6:
                     out.append((r, c))
         return out
+
+    def rc_range(self, geom):
+        """geom 可能涵蓋之列、行範圍 (r0, r1, c0, c1)（含頭尾，外擴一格保守估計）"""
+        f = self.frame
+        xs, ys = [], []
+        for v in geom.vertices():
+            lx, ly = f.to_local(v.x(), v.y())
+            xs.append(lx)
+            ys.append(ly)
+        if not xs:
+            return 0, self.rows - 1, 0, self.cols - 1
+        c0 = int(math.floor((min(xs) + f.w / 2.0) / self.cell)) - 1
+        c1 = int(math.floor((max(xs) + f.w / 2.0) / self.cell)) + 1
+        r0 = int(math.floor((f.h / 2.0 - max(ys)) / self.cell)) - 1
+        r1 = int(math.floor((f.h / 2.0 - min(ys)) / self.cell)) + 1
+        return max(0, r0), min(self.rows - 1, r1), max(0, c0), min(self.cols - 1, c1)
 
     def cell_center(self, r, c):
         f = self.frame
@@ -298,6 +315,24 @@ class ContourSet(object):
             f = QgsFeature(i)
             f.setGeometry(g)
             self.index.addFeature(f)
+
+    def clipped(self, poly):
+        """只保留 poly 內之等高線線段（自動搜尋用：縮小每次交點計算之資料量）"""
+        eng = QgsGeometry.createGeometryEngine(poly.constGet())
+        eng.prepareGeometry()
+        geoms, elev = [], []
+        for cid in self.index.intersects(poly.boundingBox()):
+            g = self.geoms[cid]
+            if not eng.intersects(g.constGet()):
+                continue
+            part = g.intersection(poly)
+            if part.isNull() or part.isEmpty():
+                continue
+            for sub in part.asGeometryCollection():
+                if sub.type() == GEOM_LINE and not sub.isEmpty():
+                    geoms.append(sub)
+                    elev.append(self.elev[cid])
+        return ContourSet(geoms, elev)
 
     @staticmethod
     def from_layer(layer, dest_crs, elev_field=None, extent=None, feedback=None):
@@ -390,6 +425,134 @@ def count_intersections(grid, contours, feedback=None, edges=None):
             if feedback.isCanceled():
                 break
     return counts, pts
+
+
+def cell_point_count(r, c, epts):
+    """坵塊四邊交點總數 n：相異點才計數（等高線剛好通過方格節點時只計一次）"""
+    uniq = set()
+    for k in Grid.cell_edges(r, c):
+        for p, _z in epts.get(k, []):
+            uniq.add(_key(p, 1e-4))
+    return len(uniq)
+
+
+# --------------------------------------------------------------------------
+# 坵塊自動搜尋（依建物）
+# --------------------------------------------------------------------------
+GOAL_LE = "le"   # 涵蓋建物之坵塊中，「N 級坡（含）以下」個數最少
+GOAL_GT = "gt"   # 涵蓋建物之坵塊中，「超過 N 級坡」個數最少
+
+
+def lattice_frame(geom, cx, cy, angle, cell, ox=0.0, oy=0.0):
+    """方格線通過「(cx, cy) 沿旋轉角 angle 偏移 (ox, oy)」之點，
+    回傳以整格包含 geom 的最小方格範圍（Frame）。"""
+    base = Frame(cx, cy, 1.0, 1.0, angle)
+    xs, ys = [], []
+    for v in geom.vertices():
+        lx, ly = base.to_local(v.x(), v.y())
+        xs.append(lx)
+        ys.append(ly)
+    size = float(cell)
+    eps = 1e-9
+    left = ox + math.floor((min(xs) - ox) / size + eps) * size
+    right = ox + math.ceil((max(xs) - ox) / size - eps) * size
+    bot = oy + math.floor((min(ys) - oy) / size + eps) * size
+    top = oy + math.ceil((max(ys) - oy) / size - eps) * size
+    if right - left < size:
+        right = left + size
+    if top - bot < size:
+        bot = top - size
+    c = base.to_map((left + right) / 2.0, (top + bot) / 2.0)
+    return Frame(c.x(), c.y(), right - left, top - bot, angle)
+
+
+def search_candidates(cell, angle_step, offset_step):
+    """回傳 (angles, offsets)。方格具 90° 對稱，角度取 (-45°, 45°]；
+    位置（方格線偏移）沿兩軸各取 [0, L)。"""
+    na = max(1, int(round(90.0 / max(angle_step, 1e-6))))
+    angles = []
+    for i in range(na):
+        a = i * 90.0 / na
+        angles.append(round(a - 90.0 if a > 45.0 + 1e-9 else a, 6))
+    no = max(1, int(math.ceil(float(cell) / max(offset_step, 1e-6) - 1e-9)))
+    offsets = [i * float(cell) / no for i in range(no)]
+    return angles, offsets
+
+
+def evaluate_building_cells(frame, cell, dh, contours, bld_geom, pi=PI_314, plan_geom=None):
+    """回傳涵蓋建物之坵塊 [(r, c, n, S, grade)]（計算方式與 run_analysis 相同）"""
+    grid = Grid(frame, cell)
+    keep = grid.overlay_cells(bld_geom)
+    if plan_geom is not None:
+        ok = set(grid.overlay_cells(plan_geom))
+        keep = [rc for rc in keep if rc in ok]
+    edge_keys, seen = [], set()
+    for r, c in keep:
+        for k in Grid.cell_edges(r, c):
+            if k not in seen:
+                seen.add(k)
+                edge_keys.append(k)
+    _counts, epts = count_intersections(grid, contours, None, edge_keys)
+    out = []
+    for r, c in keep:
+        n = cell_point_count(r, c, epts)
+        s = slope_percent(n, dh, cell, pi)
+        out.append((r, c, n, s, slope_grade(s)))
+    return out
+
+
+def search_best_frame(plan_geom, bld_geom, cell, dh, contours, pi=PI_314,
+                      angle_step=5.0, offset_step=5.0, grade_limit=3, goal=GOAL_LE,
+                      feedback=None):
+    """
+    坵塊自動搜尋：嘗試各種旋轉角度與方格位置，找出涵蓋建物之坵塊中
+    目標坵塊數最少的方格範圍（方格範圍以整格包含計畫／基地範圍）。
+
+    goal = GOAL_LE：「grade_limit 級坡（含）以下」之坵塊數最少
+    goal = GOAL_GT：「超過 grade_limit 級坡」之坵塊數最少
+    同分時依序取：涵蓋建物之坵塊總數較少、坵塊坡度總和較小者。
+
+    回傳 dict：frame, angle, ox, oy, target, total, grades{級:數}, cells,
+               tried（已試組合數）, ties（與最佳同目標數之組合數）,
+               worst（各組合中目標數之最大值）, ranking（前 10 名）
+    使用者取消時回傳 None。
+    """
+    c0 = plan_geom.centroid().asPoint()
+    angles, offsets = search_candidates(cell, angle_step, offset_step)
+    total = len(angles) * len(offsets) * len(offsets)
+    scored = []
+    i = 0
+    for a in angles:
+        for ox in offsets:
+            for oy in offsets:
+                frame = lattice_frame(plan_geom, c0.x(), c0.y(), a, cell, ox, oy)
+                cells = evaluate_building_cells(frame, cell, dh, contours, bld_geom, pi)
+                if goal == GOAL_GT:
+                    target = sum(1 for x in cells if x[4] > grade_limit)
+                else:
+                    target = sum(1 for x in cells if x[4] <= grade_limit)
+                scored.append((target, len(cells), round(sum(x[3] for x in cells), 6), i, a, ox, oy))
+                i += 1
+                if feedback is not None and i % 5 == 0:
+                    feedback.setProgress(100.0 * i / total)
+                    if feedback.isCanceled():
+                        return None
+    scored.sort()
+    best = scored[0]
+    a, ox, oy = best[4], best[5], best[6]
+    frame = lattice_frame(plan_geom, c0.x(), c0.y(), a, cell, ox, oy)
+    cells = evaluate_building_cells(frame, cell, dh, contours, bld_geom, pi)
+    grades = OrderedDict((g, 0) for g in GRADES)
+    for x in cells:
+        grades[x[4]] += 1
+    if feedback is not None:
+        feedback.setProgress(100)
+    return {"frame": frame, "angle": a, "ox": ox, "oy": oy, "target": best[0], "total": best[1],
+            "grades": grades, "cells": cells, "tried": len(scored),
+            "ties": sum(1 for x in scored if x[0] == best[0]),
+            "worst": max(x[0] for x in scored),
+            "ranking": [{"target": x[0], "total": x[1], "angle": x[4], "ox": x[5], "oy": x[6]}
+                        for x in scored[:10]]}
 
 
 # --------------------------------------------------------------------------
@@ -587,13 +750,7 @@ def run_analysis(frame, cell, dh, crs, contours, pi=PI_314, plan_geom=None,
             no += 1
             ek = Grid.cell_edges(r, c)
             side = [counts.get(k, 0) for k in ek]
-            # distinct points on the cell boundary (a contour crossing exactly
-            # through a grid node must be counted only once)
-            uniq = set()
-            for k in ek:
-                for p, _z in epts.get(k, []):
-                    uniq.add(_key(p, 1e-4))
-            n = len(uniq)
+            n = cell_point_count(r, c, epts)
             s = slope_percent(n, dh, cell, pi)
             th = slope_angle_deg(s)
             g = slope_grade(s)
