@@ -502,14 +502,14 @@ def evaluate_building_cells(frame, cell, dh, contours, bld_geom, pi=PI_314, plan
 
 
 def search_best_frame(plan_geom, bld_geom, cell, dh, contours, pi=PI_314,
-                      angle_step=5.0, offset_step=5.0, grade_limit=3, goal=GOAL_LE,
+                      angle_step=5.0, offset_step=5.0, grade_limit=3, goal=GOAL_GT,
                       feedback=None):
     """
     坵塊自動搜尋：嘗試各種旋轉角度與方格位置，找出涵蓋建物之坵塊中
     目標坵塊數最少的方格範圍（方格範圍以整格包含計畫／基地範圍）。
 
+    goal = GOAL_GT：「超過 grade_limit 級坡」之坵塊數最少（預設）
     goal = GOAL_LE：「grade_limit 級坡（含）以下」之坵塊數最少
-    goal = GOAL_GT：「超過 grade_limit 級坡」之坵塊數最少
     同分時依序取：涵蓋建物之坵塊總數較少、坵塊坡度總和較小者。
 
     回傳 dict：frame, angle, ox, oy, target, total, grades{級:數}, cells,

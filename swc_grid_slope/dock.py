@@ -217,7 +217,7 @@ class SlopeDock(QDockWidget):
         self.cb_bld.setToolTip("建物（多邊形）圖層；有選取圖徵時只用選取的圖徵")
         f3s.addRow("建築範圍圖層", self.cb_bld)
         self.cb_goal = QComboBox()
-        self.cb_goal.addItems(["N 級坡（含）以下之坵塊數最少", "超過 N 級坡之坵塊數最少"])
+        self.cb_goal.addItems(["超過 N 級坡之坵塊數最少", "N 級坡（含）以下之坵塊數最少"])
         self.cb_goal.setToolTip("統計對象為涵蓋（與建物有交集）之坵塊；同數時取涵蓋建物坵塊總數較少、坡度總和較小者")
         f3s.addRow("搜尋目標", self.cb_goal)
         self.sp_glimit = QSpinBox()
@@ -618,7 +618,7 @@ class SlopeDock(QDockWidget):
         cell = self.cell_size()
         dh = self.sp_dh.value()
         n_limit = self.sp_glimit.value()
-        goal = core.GOAL_GT if self.cb_goal.currentIndex() == 1 else core.GOAL_LE
+        goal = core.GOAL_LE if self.cb_goal.currentIndex() == 1 else core.GOAL_GT
         goal_text = ("超過 {} 級坡" if goal == core.GOAL_GT else "{} 級坡（含）以下").format(n_limit)
         angles, offsets = core.search_candidates(cell, self.sp_astep.value(), self.sp_ostep.value())
         combos = len(angles) * len(offsets) ** 2
